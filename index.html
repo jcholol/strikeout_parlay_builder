@@ -1,0 +1,2101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>THE BULLPEN — MLB Pitcher Parlay Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0a0f14;
+    --bg-2:#0e151c;
+    --panel:#121b24;
+    --panel-2:#16212c;
+    --line:#22323f;
+    --line-soft:#1a2832;
+    --ink:#e8eef2;
+    --ink-dim:#8aa0ad;
+    --ink-faint:#5c7180;
+    --amber:#ffb627;
+    --amber-dim:#c98a16;
+    --green:#3ddc84;
+    --green-dim:#1f8c52;
+    --red:#ff5763;
+    --red-dim:#a82f38;
+    --chalk:#cfe0e8;
+    --glow-amber:0 0 0 1px rgba(255,182,39,.15), 0 0 24px -6px rgba(255,182,39,.4);
+    --radius:14px;
+    /* shared system: spacing rhythm, card depth, hover wash, on-accent text */
+    --shadow-card:0 1px 0 rgba(255,255,255,.02), 0 18px 40px -28px rgba(0,0,0,.7);
+    --hover:rgba(255,255,255,.03);
+    --tint:rgba(255,255,255,.015);
+    --foot:rgba(0,0,0,.18);
+    --on-amber:#1a1203;
+    --atmos-1:rgba(255,182,39,.07);
+    --atmos-2:rgba(61,220,132,.05);
+    --grain:.03;
+    color-scheme:dark;
+  }
+  /* ===== Light theme (Apple-clean) ===== */
+  :root[data-theme="light"]{
+    --bg:#f1f1f4;
+    --bg-2:#fbfbfd;
+    --panel:#ffffff;
+    --panel-2:#fcfcfe;
+    --line:#dddde2;
+    --line-soft:#ebebf0;
+    --ink:#1d1d1f;
+    --ink-dim:#5f5f66;
+    --ink-faint:#9596a0;
+    --amber:#b26a00;
+    --amber-dim:#d8ab55;
+    --green:#1f9d57;
+    --green-dim:#a7dcbe;
+    --red:#d62f3c;
+    --red-dim:#f0b6bb;
+    --chalk:#111114;
+    --glow-amber:0 1px 2px rgba(0,0,0,.06), 0 10px 26px -12px rgba(178,106,0,.4);
+    --shadow-card:0 1px 2px rgba(0,0,0,.05), 0 12px 32px -18px rgba(0,0,0,.18);
+    --hover:rgba(0,0,0,.035);
+    --tint:rgba(0,0,0,.018);
+    --foot:rgba(0,0,0,.035);
+    --on-amber:#ffffff;
+    --atmos-1:rgba(178,106,0,.05);
+    --atmos-2:rgba(31,157,87,.04);
+    --grain:.015;
+    color-scheme:light;
+  }
+  /* theme-aware overrides for spots that previously hardcoded black/white washes */
+  .panel > h2,.scorebox{background:var(--tint)}
+  .ticket-foot{background:var(--foot)}
+  .leg-line[data-legtoggle]:hover,.krank tr:hover td{background:var(--hover)}
+  input,select{color-scheme:inherit}
+  .btn.amber,.tab.active,.legbtn.active,.kbadge.lead{color:var(--on-amber)}
+  :root[data-theme="light"] .flag.il,:root[data-theme="light"] .pstats .st.dyn.il{color:#1a6ea3;border-color:#a9cfe6;background:rgba(26,110,163,.07)}
+  :root[data-theme="light"] .flag.out,:root[data-theme="light"] .pstats .st.dyn.out{color:#c23b46}
+  :root[data-theme="light"] .ball{box-shadow:inset -6px -8px 14px rgba(0,0,0,.12), 0 6px 16px -8px rgba(0,0,0,.3)}
+  :root[data-theme="light"] .btn.amber:hover{background:#c8821a}
+  :root[data-theme="light"] body::after{mix-blend-mode:multiply}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Barlow Condensed",system-ui,sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+    position:relative;
+  }
+  /* atmosphere: soft directional glows (calmer, theme-aware) */
+  body::before{
+    content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(1200px 620px at 82% -12%, var(--atmos-1), transparent 60%),
+      radial-gradient(900px 520px at -12% 112%, var(--atmos-2), transparent 55%),
+      var(--bg);
+  }
+  body::after{
+    content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:var(--grain);
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .wrap{position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:28px 22px 80px}
+
+  /* ===== Header ===== */
+  header.top{
+    display:flex;align-items:flex-end;justify-content:space-between;gap:20px;
+    border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:26px;flex-wrap:wrap;
+  }
+  .brand{display:flex;align-items:center;gap:16px}
+  .ball{
+    width:54px;height:54px;border-radius:50%;flex:none;position:relative;
+    background:radial-gradient(circle at 35% 30%, #fff, #e7e1d6 70%, #cabfa8);
+    box-shadow:inset -6px -8px 14px rgba(0,0,0,.25), 0 6px 18px -6px rgba(0,0,0,.6);
+  }
+  .ball::before,.ball::after{
+    content:"";position:absolute;top:8px;bottom:8px;width:18px;border:2px solid transparent;
+    border-radius:50%;
+  }
+  .ball::before{left:5px;border-right-color:var(--red);transform:rotate(8deg)}
+  .ball::after{right:5px;border-left-color:var(--red);transform:rotate(-8deg)}
+  .title h1{
+    font-family:"Oswald";font-weight:700;font-size:38px;letter-spacing:2px;line-height:.95;
+    text-transform:uppercase;color:var(--chalk);
+  }
+  .title h1 b{color:var(--amber);font-weight:700}
+  .title p{
+    font-family:"JetBrains Mono";font-size:11px;letter-spacing:3px;color:var(--ink-faint);
+    text-transform:uppercase;margin-top:6px;
+  }
+  .led{
+    font-family:"JetBrains Mono";font-size:11px;letter-spacing:2px;color:var(--green);
+    display:flex;align-items:center;gap:8px;text-transform:uppercase;
+  }
+  .led .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .head-right{display:flex;align-items:center;gap:16px}
+  .theme-toggle{
+    width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--panel-2);
+    color:var(--ink-dim);cursor:pointer;font-size:16px;line-height:1;display:grid;place-items:center;
+    transition:transform .15s, border-color .15s, background .15s;box-shadow:var(--shadow-card);
+  }
+  .theme-toggle:hover{border-color:var(--ink-faint);transform:translateY(-1px)}
+  .theme-toggle .ti{transition:transform .4s cubic-bezier(.2,.9,.3,1.4);display:inline-block}
+  .theme-toggle:active .ti{transform:rotate(40deg) scale(.9)}
+
+  /* ===== Scoreboard stats ===== */
+  .scoreboard{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:30px;
+  }
+  .stat{
+    background:linear-gradient(180deg,var(--panel),var(--bg-2));
+    border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;
+    position:relative;overflow:hidden;box-shadow:var(--shadow-card);
+    animation:rise .5s both;
+  }
+  .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--line)}
+  .stat.amber::before{background:var(--amber);box-shadow:0 0 14px var(--amber)}
+  .stat.green::before{background:var(--green);box-shadow:0 0 14px var(--green)}
+  .stat.red::before{background:var(--red);box-shadow:0 0 14px var(--red)}
+  .stat .label{
+    font-family:"JetBrains Mono";font-size:10px;letter-spacing:2.5px;color:var(--ink-faint);
+    text-transform:uppercase;margin-bottom:10px;
+  }
+  .stat .val{
+    font-family:"JetBrains Mono";font-weight:800;font-size:30px;line-height:1;color:var(--chalk);
+    font-variant-numeric:tabular-nums;
+  }
+  .stat .val.amber{color:var(--amber)}
+  .stat .val.green{color:var(--green)}
+  .stat .val.red{color:var(--red)}
+  .stat .sub{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-dim);margin-top:6px;letter-spacing:1px}
+
+  .pills{display:flex;gap:6px;margin-top:8px}
+  .pill{
+    width:30px;height:30px;border-radius:7px;display:grid;place-items:center;
+    font-family:"Oswald";font-weight:700;font-size:15px;border:1px solid var(--line);color:var(--ink-faint);
+    background:var(--bg-2);
+  }
+  .pill.w{background:rgba(61,220,132,.12);border-color:var(--green-dim);color:var(--green)}
+  .pill.l{background:rgba(255,87,99,.12);border-color:var(--red-dim);color:var(--red)}
+
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .stat:nth-child(1){animation-delay:.02s}.stat:nth-child(2){animation-delay:.06s}
+  .stat:nth-child(3){animation-delay:.1s}.stat:nth-child(4){animation-delay:.14s}
+  .stat:nth-child(5){animation-delay:.18s}.stat:nth-child(6){animation-delay:.22s}
+  .stat:nth-child(7){animation-delay:.26s}.stat:nth-child(8){animation-delay:.3s}
+
+  /* ===== Layout ===== */
+  .grid{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:24px;align-items:start}
+
+  .panel{
+    background:linear-gradient(180deg,var(--panel),var(--panel-2));
+    border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+    box-shadow:var(--shadow-card);
+  }
+  .panel > h2{
+    font-family:"Oswald";font-weight:600;letter-spacing:2px;text-transform:uppercase;font-size:16px;
+    padding:16px 20px;border-bottom:1px solid var(--line);color:var(--chalk);
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    background:rgba(255,255,255,.015);
+  }
+  .panel > h2 .tag{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint);letter-spacing:1px}
+  .panel-body{padding:18px 20px}
+
+  /* ===== Forms ===== */
+  label.fld{display:block;margin-bottom:14px}
+  label.fld span{
+    display:block;font-family:"JetBrains Mono";font-size:10px;letter-spacing:1.5px;color:var(--ink-faint);
+    text-transform:uppercase;margin-bottom:6px;
+  }
+  input,select{
+    width:100%;background:var(--bg);border:1px solid var(--line);color:var(--ink);
+    font-family:"Barlow Condensed";font-size:16px;padding:10px 12px;border-radius:9px;outline:none;
+    transition:border-color .15s, box-shadow .15s;
+    color-scheme:dark;
+  }
+  input::placeholder{color:var(--ink-faint)}
+  /* custom, clearly-visible amber calendar icon for date inputs on the dark theme */
+  input[type="date"]{
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23ffb627' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cline x1='16' y1='2' x2='16' y2='6'/%3E%3Cline x1='8' y1='2' x2='8' y2='6'/%3E%3Cline x1='3' y1='10' x2='21' y2='10'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 12px center;padding-right:40px;
+  }
+  /* native indicator stays put (so its click target works) but is invisible —
+     the amber icon shows through, and a click handler opens the picker anywhere */
+  input[type="date"]::-webkit-calendar-picker-indicator{
+    opacity:0;cursor:pointer;
+  }
+  input[type="date"]{cursor:pointer}
+  input:focus,select:focus{border-color:var(--amber-dim);box-shadow:0 0 0 3px rgba(255,182,39,.12)}
+  select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238aa0ad' stroke-width='1.6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
+  .row{display:grid;gap:10px}
+  .row.c2{grid-template-columns:1fr 1fr}
+  .row.c3{grid-template-columns:1.4fr .8fr .9fr}
+  .row.leg{grid-template-columns:1.6fr 1fr .7fr .8fr .85fr auto;gap:8px;align-items:end}
+
+  .btn{
+    font-family:"Oswald";font-weight:600;letter-spacing:1.5px;text-transform:uppercase;font-size:13px;
+    border:1px solid var(--line);background:var(--panel-2);color:var(--ink);
+    padding:11px 16px;border-radius:9px;cursor:pointer;transition:all .15s;white-space:nowrap;
+  }
+  .btn:hover{border-color:var(--ink-faint);transform:translateY(-1px)}
+  .btn:active{transform:translateY(0)}
+  .btn.amber{background:var(--amber);color:#1a1203;border-color:var(--amber);box-shadow:var(--glow-amber)}
+  .btn.amber:hover{background:#ffc24d}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:7px 11px;font-size:11px}
+  .btn.win{border-color:var(--green-dim);color:var(--green)}
+  .btn.win:hover{background:rgba(61,220,132,.12)}
+  .btn.lose{border-color:var(--red-dim);color:var(--red)}
+  .btn.lose:hover{background:rgba(255,87,99,.12)}
+  .btn.icon{padding:7px 10px}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+
+  .legs-head{
+    display:flex;align-items:center;justify-content:space-between;margin:6px 0 10px;
+    font-family:"JetBrains Mono";font-size:10px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase;
+  }
+  #legList .row.leg{
+    background:var(--bg);border:1px solid var(--line-soft);border-radius:10px;padding:10px;margin-bottom:9px;
+    animation:rise .25s both;
+  }
+  #legList .row.leg span{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1px;color:var(--ink-faint);text-transform:uppercase;margin-bottom:5px;display:block}
+  .rmleg{background:var(--bg-2);border:1px solid var(--line);color:var(--red);border-radius:8px;cursor:pointer;font-size:18px;line-height:1;width:38px;height:38px;display:grid;place-items:center;transition:.15s}
+  .rmleg:hover{background:rgba(255,87,99,.12);border-color:var(--red-dim)}
+
+  .ticket-summary{
+    margin-top:16px;border-top:1px dashed var(--line);padding-top:16px;
+    display:grid;grid-template-columns:1fr 1fr;gap:12px;
+  }
+  .ts{background:var(--bg);border:1px solid var(--line-soft);border-radius:10px;padding:11px 13px}
+  .ts .k{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;color:var(--ink-faint);text-transform:uppercase}
+  .ts .v{font-family:"JetBrains Mono";font-weight:800;font-size:21px;margin-top:5px;color:var(--chalk);font-variant-numeric:tabular-nums}
+  .ts .v.amber{color:var(--amber)}
+  .ts .v.green{color:var(--green)}
+
+  /* ===== Tracker ===== */
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab{
+    font-family:"JetBrains Mono";font-size:10px;letter-spacing:1.5px;text-transform:uppercase;
+    padding:7px 12px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--ink-dim);cursor:pointer;transition:.15s;
+  }
+  .tab:hover{color:var(--ink)}
+  .tab.active{background:var(--amber);color:#1a1203;border-color:var(--amber);font-weight:700}
+
+  .ticket{
+    border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden;
+    background:linear-gradient(180deg,var(--panel-2),var(--bg-2));animation:rise .3s both;position:relative;
+  }
+  .ticket.pending::after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--amber)}
+  .ticket.won::after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--green);box-shadow:0 0 14px var(--green)}
+  .ticket.lost::after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--red)}
+  .ticket-top{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 18px;border-bottom:1px dashed var(--line);flex-wrap:wrap;
+  }
+  .ticket-top .meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .badge{
+    font-family:"Oswald";font-weight:700;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;
+    padding:4px 10px;border-radius:6px;border:1px solid;
+  }
+  .badge.pending{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,182,39,.1)}
+  .badge.won{color:var(--green);border-color:var(--green-dim);background:rgba(61,220,132,.1)}
+  .badge.lost{color:var(--red);border-color:var(--red-dim);background:rgba(255,87,99,.1)}
+  .ticket-top .date{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);letter-spacing:1px}
+  .ticket-top .legcount{font-family:"Oswald";font-size:14px;letter-spacing:1px;color:var(--chalk);text-transform:uppercase}
+  .ticket-legs{padding:6px 18px 12px}
+  .leg-line{
+    display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft);
+  }
+  .leg-line:last-child{border-bottom:none}
+  .leg-line .num{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint);width:22px;flex:none}
+  .leg-line .pitcher{font-family:"Oswald";font-weight:600;font-size:16px;letter-spacing:.5px;color:var(--ink);flex:none;min-width:140px}
+  .leg-line .prop{font-family:"Barlow Condensed";font-size:15px;color:var(--ink-dim);flex:1}
+  .leg-line .prop b{color:var(--chalk);font-weight:600}
+  .leg-line .odds{font-family:"JetBrains Mono";font-size:13px;color:var(--amber);font-weight:700;flex:none}
+  .leg-line[data-legtoggle]{cursor:pointer;border-radius:6px;transition:.12s;padding-left:6px;padding-right:6px}
+  .leg-line[data-legtoggle]:hover{background:rgba(255,255,255,.03)}
+  .leg-line .legmark{font-family:"JetBrains Mono";font-size:15px;font-weight:700;width:22px;text-align:center;flex:none;color:var(--ink-faint)}
+  .leg-line.hit .legmark{color:var(--green)}
+  .leg-line.hit .pitcher{color:var(--green)}
+  .leg-line.miss .legmark{color:var(--red)}
+  .leg-line.miss .pitcher{color:var(--red);text-decoration:line-through;text-decoration-color:var(--red-dim)}
+  .leg-line.miss{opacity:.7}
+  .ticket-foot{
+    display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 18px;
+    background:rgba(0,0,0,.18);flex-wrap:wrap;
+  }
+  .ticket-foot .nums{display:flex;gap:22px;flex-wrap:wrap}
+  .ticket-foot .n .k{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;color:var(--ink-faint);text-transform:uppercase}
+  .ticket-foot .n .v{font-family:"JetBrains Mono";font-weight:800;font-size:17px;color:var(--chalk);margin-top:3px;font-variant-numeric:tabular-nums}
+  .ticket-foot .n .v.green{color:var(--green)}
+  .ticket-foot .n .v.red{color:var(--red)}
+  .ticket-foot .n .v.amber{color:var(--amber)}
+  .ticket-actions{display:flex;gap:7px;flex-wrap:wrap}
+
+  .empty{
+    text-align:center;padding:50px 20px;color:var(--ink-faint);
+    font-family:"JetBrains Mono";font-size:12px;letter-spacing:1px;
+  }
+  .empty .big{font-family:"Oswald";font-size:22px;letter-spacing:2px;color:var(--ink-dim);text-transform:uppercase;margin-bottom:8px;display:block}
+
+  /* ===== Slate ===== */
+  .slate-controls{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  .slate-controls .fld{width:180px}
+  .slate-status{font-family:"JetBrains Mono";font-size:11px;letter-spacing:1px;color:var(--ink-dim);margin-left:auto}
+  .slate-status.err{color:var(--red)}
+  .slate-status.ok{color:var(--green)}
+  .odds-settings{background:var(--bg);border:1px solid var(--line-soft);border-radius:10px;padding:12px 14px;margin:10px 0}
+  .odds-settings > span{font-family:"Barlow Condensed";font-size:14px;color:var(--ink-dim)}
+  .odds-settings a{color:var(--amber)}
+  #slate{margin-top:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+  .matchup{background:var(--bg);border:1px solid var(--line-soft);border-radius:12px;overflow:hidden;animation:rise .3s both}
+  .matchup.live{border-color:var(--green-dim);box-shadow:0 0 0 1px rgba(61,220,132,.15)}
+  .scorebox{padding:7px 13px;border-bottom:1px solid var(--line-soft);background:rgba(255,255,255,.015)}
+  .score-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:3px 0}
+  .score-row .team{display:flex;align-items:baseline;gap:7px;min-width:0}
+  .score-row .ab{font-family:"Oswald";font-weight:600;font-size:16px;letter-spacing:1px;color:var(--chalk)}
+  .score-row.winner .ab{color:var(--amber)}
+  .score-row .rec{font-family:"JetBrains Mono";font-size:9px;color:var(--ink-faint);letter-spacing:.5px}
+  .score-row .rs{font-family:"JetBrains Mono";font-weight:800;font-size:18px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .score-row.winner .rs{color:var(--amber)}
+  .gstate{display:flex;align-items:center;gap:7px;margin-top:5px;font-family:"JetBrains Mono";font-size:10px;letter-spacing:.8px;color:var(--ink-dim);text-transform:uppercase}
+  .gstate .live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 1.5s infinite}
+  .gstate.final{color:var(--ink-faint)}
+
+  label.auto{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono";font-size:10px;letter-spacing:1px;color:var(--ink-dim);text-transform:uppercase;cursor:pointer}
+  label.auto input{width:auto}
+
+  /* K analysis */
+  #kResults{margin-top:14px}
+  .kpanel{background:linear-gradient(180deg,rgba(255,182,39,.06),var(--bg));border:1px solid var(--amber-dim);border-radius:12px;padding:14px 16px;animation:rise .3s both}
+  .kpanel h3{font-family:"Oswald";font-weight:600;letter-spacing:1.5px;text-transform:uppercase;font-size:14px;color:var(--amber);margin-bottom:4px}
+  .kpanel .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 0;border-bottom:1px dashed var(--line);margin-bottom:10px}
+  .kpanel .top .crown{font-size:26px}
+  .kpanel .top .who{font-family:"Oswald";font-weight:700;font-size:22px;color:var(--chalk);letter-spacing:.5px}
+  .kpanel .top .vs{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-dim)}
+  .kpanel .top .proj{margin-left:auto;text-align:right}
+  .kpanel .top .proj .big{font-family:"JetBrains Mono";font-weight:800;font-size:28px;color:var(--amber);line-height:1}
+  .kpanel .top .proj .lab{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;color:var(--ink-faint);text-transform:uppercase}
+  .krec{background:rgba(255,182,39,.07);border:1px solid var(--amber-dim);border-radius:10px;padding:11px 13px;margin-bottom:12px}
+  .krec-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+  .krec-title{font-family:"Oswald";font-weight:700;font-size:14px;letter-spacing:.8px;color:var(--amber);text-transform:uppercase}
+  .krec-prob{font-family:"JetBrains Mono";font-size:12px;font-weight:700;color:var(--green);background:rgba(61,220,132,.12);border:1px solid var(--green-dim);border-radius:10px;padding:2px 9px}
+  .krec-legbtns{display:flex;gap:5px}
+  .legbtn{font-family:"JetBrains Mono";font-size:11px;font-weight:700;padding:3px 9px;border-radius:7px;border:1px solid var(--line);background:var(--bg-2);color:var(--ink-dim);cursor:pointer;transition:.12s}
+  .legbtn:hover{border-color:var(--amber-dim);color:var(--chalk)}
+  .legbtn.active{background:var(--amber);border-color:var(--amber);color:#1a1203}
+  .krec-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .krec-warn{font-family:"JetBrains Mono";font-size:10px;color:var(--red)}
+  .krec-sub{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint);margin-bottom:9px;letter-spacing:.3px}
+  .cell-note{font-family:"Barlow Condensed";font-size:11px;line-height:1.25;color:var(--ink-faint);margin-top:3px;text-transform:none;letter-spacing:.2px;white-space:normal;max-width:170px;margin-left:auto}
+  .krec-legs{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+  .krec-leg{display:flex;align-items:baseline;gap:8px;font-size:13px}
+  .krec-leg .krec-name{font-family:"Oswald";font-weight:600;font-size:15px;color:var(--chalk);letter-spacing:.4px;min-width:150px}
+  .krec-leg .krec-bet{font-family:"Barlow Condensed";font-size:15px;color:var(--ink-dim)}
+  .krec-leg .krec-p{margin-left:auto;font-family:"JetBrains Mono";font-size:12px;font-weight:700;color:var(--amber)}
+  .krank{width:100%;border-collapse:collapse}
+  .krank th{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1px;color:var(--ink-faint);text-transform:uppercase;text-align:right;padding:6px 8px;font-weight:400;border-bottom:1px solid var(--line)}
+  .krank th:first-child,.krank th:nth-child(2){text-align:left}
+  .krank td{font-family:"JetBrains Mono";font-size:12px;padding:7px 8px;border-bottom:1px solid var(--line-soft);text-align:right;color:var(--ink);font-variant-numeric:tabular-nums;cursor:pointer}
+  .krank td:nth-child(2){text-align:left;font-family:"Oswald";font-size:14px;font-weight:600;color:var(--chalk)}
+  .krank tr:hover td{background:rgba(255,255,255,.02)}
+  .krank .pj{color:var(--amber);font-weight:700}
+  .krank .p6{color:var(--green)}
+  .kbadge{display:inline-block;font-family:"JetBrains Mono";font-size:9px;letter-spacing:.5px;background:rgba(255,182,39,.12);border:1px solid var(--amber-dim);color:var(--amber);border-radius:5px;padding:2px 6px;margin-left:6px}
+  .kbadge.lead{background:var(--amber);color:#1a1203;font-weight:700}
+  .flag{font-family:"JetBrains Mono";font-size:9px;letter-spacing:.3px;margin-left:6px;padding:1px 5px;border-radius:4px;border:1px solid}
+  .flag.bullpen{color:var(--red);border-color:var(--red-dim);background:rgba(255,87,99,.1)}
+  .flag.thin{color:var(--ink-faint);border-color:var(--line)}
+  .flag.il{color:#7fd4ff;border-color:#2d6a8a;background:rgba(127,212,255,.1)}
+  .flag.out{color:#ffb0b0;border-color:var(--red-dim);background:rgba(255,87,99,.08)}
+  .flag.work{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,182,39,.08)}
+  .kbadge.bp{background:rgba(255,87,99,.12);border-color:var(--red-dim);color:var(--red)}
+  .krank tr:has(.flag.bullpen) td{opacity:.72}
+  .pcard{padding:11px 13px;border-bottom:1px solid var(--line-soft)}
+  .pcard:last-child{border-bottom:none}
+  .pcard .ptop{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}
+  .pcard .pname{font-family:"Oswald";font-weight:600;font-size:16px;letter-spacing:.4px;color:var(--ink)}
+  .pcard .pteam{font-family:"JetBrains Mono";font-size:9px;color:var(--ink-faint);letter-spacing:1px;text-transform:uppercase}
+  .pstats{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:9px}
+  .pstats .st{font-family:"JetBrains Mono";font-size:10px;letter-spacing:.5px;background:var(--bg-2);border:1px solid var(--line-soft);border-radius:6px;padding:3px 7px;color:var(--ink-dim)}
+  .pstats .st b{color:var(--amber);font-weight:700}
+  .pstats .st.tbd{color:var(--ink-faint)}
+  .pstats .st.dyn b{color:var(--green)}
+  .pstats .st.dyn.il{color:#7fd4ff;border-color:#2d6a8a;background:rgba(127,212,255,.08)}
+  .pstats .st.dyn.out{color:#ffb0b0;border-color:var(--red-dim);background:rgba(255,87,99,.07)}
+  .padd{display:flex;gap:6px;flex-wrap:wrap}
+  .odds-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:7px}
+  .odds-chip{font-family:"JetBrains Mono";font-size:10px;background:rgba(255,182,39,.08);border:1px solid var(--amber-dim);color:var(--amber);border-radius:6px;padding:3px 7px;cursor:pointer;transition:.15s}
+  .odds-chip:hover{background:rgba(255,182,39,.18)}
+
+  /* ===== Analytics ===== */
+  .analytics{margin-top:24px}
+  #chart svg{width:100%;height:auto;display:block}
+  #chart .ax{font-family:"JetBrains Mono";font-size:9px;fill:var(--ink-faint);letter-spacing:.5px}
+  .ptable{width:100%;border-collapse:collapse}
+  .ptable th{
+    font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;color:var(--ink-faint);text-transform:uppercase;
+    text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:400;
+  }
+  .ptable th:first-child{text-align:left}
+  .ptable td{
+    font-family:"JetBrains Mono";font-size:13px;color:var(--ink);padding:9px 10px;border-bottom:1px solid var(--line-soft);
+    text-align:right;font-variant-numeric:tabular-nums;
+  }
+  .ptable td:first-child{text-align:left;font-family:"Oswald";font-weight:600;font-size:15px;letter-spacing:.5px;color:var(--chalk)}
+  .ptable tr:last-child td{border-bottom:none}
+  .ptable .pos{color:var(--green)}
+  .ptable .neg{color:var(--red)}
+  .ptable .wr{color:var(--amber)}
+  .ptable .carried{color:var(--ink-faint)}
+  .ptable .carried-pill{display:inline-block;min-width:20px;padding:1px 7px;border-radius:10px;font-family:"JetBrains Mono";font-size:11px;font-weight:700;color:var(--amber);background:rgba(255,182,39,.12);border:1px solid var(--amber-dim)}
+  .barwrap{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end}
+  .bar{width:54px;height:6px;border-radius:3px;background:var(--line);overflow:hidden;position:relative}
+  .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--amber);border-radius:3px}
+
+  footer{margin-top:40px;text-align:center;font-family:"JetBrains Mono";font-size:10px;letter-spacing:1.5px;color:var(--ink-faint)}
+  footer a{color:var(--ink-dim);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+
+  /* cloud sync */
+  .sync-panel{max-width:720px;margin:34px auto 0;background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:14px;padding:18px 20px;animation:rise .3s both}
+  .sync-panel h3{font-family:"Oswald";font-weight:600;letter-spacing:1.5px;text-transform:uppercase;font-size:15px;color:var(--chalk);display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .sync-panel .muted{font-family:"Barlow Condensed";font-size:14px;color:var(--ink-dim);line-height:1.4}
+  .sync-panel .muted a{color:var(--amber)}
+  .sync-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  .sync-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .syncpill{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--ink-faint)}
+  .syncpill.on{color:var(--green);border-color:var(--green-dim);background:rgba(61,220,132,.1)}
+  .syncpill.err{color:var(--red);border-color:var(--red-dim);background:rgba(255,87,99,.1)}
+  .syncpill.busy{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,182,39,.1)}
+  #syncMsg{font-family:"JetBrains Mono";font-size:11px;letter-spacing:.5px}
+  #storeNote.synced{color:var(--green)}
+  @media(max-width:640px){.sync-grid{grid-template-columns:1fr}}
+
+  /* toast */
+  #toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(120%);
+    background:var(--panel);border:1px solid var(--amber-dim);color:var(--chalk);
+    font-family:"JetBrains Mono";font-size:12px;letter-spacing:1px;padding:12px 20px;border-radius:10px;
+    box-shadow:var(--glow-amber);z-index:50;transition:transform .35s cubic-bezier(.2,.9,.3,1.4);
+  }
+  #toast.show{transform:translateX(-50%) translateY(0)}
+
+  @media(max-width:920px){
+    .scoreboard{grid-template-columns:repeat(2,1fr)}
+    .grid{grid-template-columns:1fr}
+    .row.leg{grid-template-columns:1fr 1fr;gap:8px}
+    .row.leg .rmleg{grid-column:1/-1;width:100%}
+    .title h1{font-size:30px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="ball"></div>
+      <div class="title">
+        <h1>THE <b>BULLPEN</b></h1>
+        <p>MLB Pitcher Parlay Tracker &amp; Builder</p>
+      </div>
+    </div>
+    <div class="head-right">
+      <button class="theme-toggle" id="themeToggle" title="Switch light / dark" aria-label="Toggle theme"><span class="ti">🌙</span></button>
+      <div class="led"><span class="dot"></span><span id="ledText">SESSION LIVE</span></div>
+    </div>
+  </header>
+
+  <!-- SCOREBOARD -->
+  <section class="scoreboard" id="scoreboard"></section>
+
+  <!-- TODAY'S SLATE (live MLB data) -->
+  <section class="panel" style="margin-bottom:24px">
+    <h2>Today's Slate · Probable Starters
+      <span class="tag" id="slateTag">LIVE · MLB STATSAPI</span>
+    </h2>
+    <div class="panel-body">
+      <div class="slate-controls">
+        <label class="fld" style="margin-bottom:0">
+          <span>Game Date</span>
+          <input type="date" id="slateDate" />
+        </label>
+        <button class="btn amber" id="loadSlate">Load Slate</button>
+        <button class="btn" id="analyzeK" title="Project strikeouts & rank the best K play">🔎 Best K Play</button>
+        <button class="btn ghost" id="refreshSlate" title="Refresh scores">↻</button>
+        <label class="auto"><input type="checkbox" id="autoRefresh" /> Auto</label>
+        <button class="btn ghost" id="oddsSettingsBtn" title="Live odds settings">⚙ Odds Key</button>
+        <span class="slate-status" id="slateStatus"></span>
+      </div>
+      <div id="kResults"></div>
+      <div id="oddsSettings" class="odds-settings" hidden>
+        <span>Paste your <a href="https://the-odds-api.com" target="_blank" rel="noopener">The Odds API</a> key to pull live pitcher prop lines (player props need a paid plan). Stored only in this browser.</span>
+        <div class="row c2" style="margin-top:8px">
+          <input type="password" id="oddsKey" placeholder="the-odds-api key…" />
+          <button class="btn sm amber" id="saveOddsKey">Save Key</button>
+        </div>
+      </div>
+      <div id="slate"></div>
+    </div>
+  </section>
+
+  <!-- MAIN -->
+  <div class="grid">
+
+    <!-- BUILDER -->
+    <section class="panel">
+      <h2>Build a Parlay <span class="tag">TICKET</span></h2>
+      <div class="panel-body">
+
+        <div class="legs-head">
+          <span id="legsTitle">LEGS · 0</span>
+          <button class="btn ghost sm" id="addLeg">+ Add Pitcher Leg</button>
+        </div>
+        <div id="legList"></div>
+
+        <div class="row c3" style="margin-top:6px">
+          <label class="fld" style="margin-bottom:0">
+            <span>Wager ($)</span>
+            <input type="number" id="wager" min="0" step="0.01" placeholder="25.00" />
+          </label>
+          <label class="fld" style="margin-bottom:0">
+            <span>To Win ($)</span>
+            <input type="number" id="toWin" min="0" step="0.01" placeholder="50.00" />
+          </label>
+          <label class="fld" style="margin-bottom:0">
+            <span>Date</span>
+            <input type="date" id="betDate" />
+          </label>
+        </div>
+
+        <div class="ticket-summary">
+          <div class="ts"><div class="k">Combined Odds</div><div class="v amber" id="sumOdds">—</div></div>
+          <div class="ts"><div class="k">To Win (Profit)</div><div class="v green" id="sumProfit">$0.00</div></div>
+          <div class="ts"><div class="k">Total Payout</div><div class="v" id="sumPayout">$0.00</div></div>
+          <div class="ts"><div class="k">Legs</div><div class="v" id="sumLegs">0</div></div>
+        </div>
+
+        <button class="btn amber" id="saveParlay" style="width:100%;margin-top:16px;padding:13px">Place Parlay on the Board</button>
+      </div>
+    </section>
+
+    <!-- TRACKER -->
+    <section class="panel">
+      <h2>The Board
+        <button class="btn ghost sm" id="gradeBtn" title="Pull final results and settle pending tickets">⚾ Settle from Results</button>
+        <div class="tabs" id="tabs">
+          <button class="tab active" data-f="all">All</button>
+          <button class="tab" data-f="pending">Pending</button>
+          <button class="tab" data-f="won">Won</button>
+          <button class="tab" data-f="lost">Lost</button>
+        </div>
+      </h2>
+      <div class="panel-body" id="board"></div>
+    </section>
+
+  </div>
+
+  <!-- ANALYTICS -->
+  <div class="grid analytics">
+    <section class="panel">
+      <h2>Cumulative Net P&amp;L <span class="tag" id="chartTag">SETTLED</span></h2>
+      <div class="panel-body"><div id="chart"></div></div>
+    </section>
+    <section class="panel">
+      <h2>By Pitcher <span class="tag">SETTLED TICKETS</span></h2>
+      <div class="panel-body" id="pitcherTable"></div>
+    </section>
+  </div>
+
+  <!-- CLOUD SYNC -->
+  <div id="syncPanel" class="sync-panel" hidden>
+    <h3>☁ Cloud Sync <span class="syncpill" id="syncState">OFF</span></h3>
+    <p class="muted">Sync your parlays across devices via your own free <a href="https://supabase.com" target="_blank" rel="noopener">Supabase</a> project. Setup is one-time (see the steps I gave you). Your code is the only key — keep it private.</p>
+    <div class="sync-grid">
+      <label class="fld"><span>Supabase Project URL</span><input id="sbUrl" placeholder="https://xxxx.supabase.co" /></label>
+      <label class="fld"><span>Supabase anon key</span><input id="sbKey" type="password" placeholder="eyJhbGci…" /></label>
+    </div>
+    <div class="sync-actions">
+      <button class="btn sm amber" id="sbSaveCfg">Save Config</button>
+      <button class="btn sm" id="sbNew">Generate New Code</button>
+    </div>
+    <div class="sync-grid" style="margin-top:10px">
+      <label class="fld" style="margin-bottom:0"><span>Your Sync Code</span><input id="sbCode" placeholder="paste a code to connect a 2nd device" /></label>
+      <div style="display:flex;gap:7px;align-items:flex-end">
+        <button class="btn sm" id="sbConnect">Connect</button>
+        <button class="btn sm" id="sbSyncNow">Sync Now</button>
+        <button class="btn sm ghost" id="sbCopy" title="copy code">⧉</button>
+        <button class="btn sm ghost" id="sbDisconnect">Off</button>
+      </div>
+    </div>
+    <p class="muted" id="syncMsg" style="margin-top:9px"></p>
+  </div>
+
+  <footer>
+    THE BULLPEN · <span id="storeNote">data saved locally in this browser</span> ·
+    <a id="syncBtn">☁ cloud sync</a> ·
+    <a id="exportBtn">export json</a> ·
+    <a id="csvBtn">export csv</a> ·
+    <a id="importBtn">import</a> ·
+    <a id="clearBtn">reset all</a>
+    <input type="file" id="importFile" accept="application/json" hidden />
+  </footer>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ---------- Markets for pitchers ---------- */
+const MARKETS = [
+  "Strikeouts","Outs Recorded","Earned Runs Allowed","Hits Allowed",
+  "Walks Allowed","Pitching Win","Pitches Thrown","Hits + Walks Allowed (WHIP)","Record a No-Decision"
+];
+const SIDES = ["Over","Under","Yes","No"];
+
+/* ---------- State ---------- */
+const LS_KEY = "bullpen.parlays.v1";
+let parlays = load();
+let filter = "all";
+let draftLegs = [ newLeg() ];
+
+function newLeg(){ return { pitcher:"", market:"Strikeouts", line:"", side:"Over", odds:"", personId:null, gamePk:null }; }
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function load(){ try{ return JSON.parse(localStorage.getItem(LS_KEY)) || []; }catch(e){ return []; } }
+let applyingRemote=false, localUpdatedAt=localStorage.getItem("bullpen.updatedAt")||"";
+function save(){
+  localStorage.setItem(LS_KEY, JSON.stringify(parlays));
+  if(!applyingRemote){
+    localUpdatedAt=new Date().toISOString();
+    localStorage.setItem("bullpen.updatedAt", localUpdatedAt);
+    schedulePush();
+  }
+}
+
+/* ---------- Odds math (American) ---------- */
+function amToDec(a){
+  a = Number(a);
+  if(!a || isNaN(a)) return null;
+  return a > 0 ? 1 + a/100 : 1 + 100/Math.abs(a);
+}
+function decToAm(d){
+  if(!d || d<=1) return null;
+  return d >= 2 ? Math.round((d-1)*100) : -Math.round(100/(d-1));
+}
+function fmtAm(a){ if(a===null||a===undefined||isNaN(a)) return "—"; return a>0 ? "+"+a : ""+a; }
+function money(n){
+  const s = (n<0?"-":"") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  return s;
+}
+/* combined decimal odds from legs that have odds entered */
+function combinedDecimal(legs){
+  const valid = legs.map(l=>amToDec(l.odds)).filter(d=>d!==null);
+  if(valid.length===0) return null;
+  return valid.reduce((a,b)=>a*b,1);
+}
+
+/* ---------- Stats ---------- */
+function computeStats(){
+  const settled = parlays.filter(p=>p.status!=="pending")
+                         .sort((a,b)=>new Date(b.settledAt||b.date)-new Date(a.settledAt||a.date));
+  const wins = settled.filter(p=>p.status==="won").length;
+  const losses = settled.filter(p=>p.status==="lost").length;
+  const winRate = (wins+losses) ? (wins/(wins+losses)*100) : 0;
+
+  // wagered across settled bets
+  const wagered = settled.reduce((s,p)=>s+(+p.wager||0),0);
+  // profit = winnings on won bets (payout - wager)
+  const profit = settled.filter(p=>p.status==="won").reduce((s,p)=>s+(p.payout - p.wager),0);
+  // net p&l = profit on wins minus stake lost on losses
+  const lostStake = settled.filter(p=>p.status==="lost").reduce((s,p)=>s+(+p.wager||0),0);
+  const net = profit - lostStake;
+
+  // last 3 (most recent settled first)
+  const last3 = settled.slice(0,3).map(p=>p.status==="won"?"W":"L");
+
+  // streak from most recent settled
+  let streak=0, type=null;
+  for(const p of settled){
+    if(type===null){ type=p.status; streak=1; }
+    else if(p.status===type){ streak++; }
+    else break;
+  }
+  const pending = parlays.filter(p=>p.status==="pending").length;
+  const pendingStake = parlays.filter(p=>p.status==="pending").reduce((s,p)=>s+(+p.wager||0),0);
+  const roi = wagered ? (net/wagered*100) : 0;
+
+  return { wins, losses, winRate, wagered, profit, net, last3, streak, streakType:type, pending, pendingStake, roi };
+}
+
+/* ---------- Render: scoreboard ---------- */
+function renderScoreboard(){
+  const s = computeStats();
+  const last3html = s.last3.length
+    ? s.last3.map(r=>`<div class="pill ${r==='W'?'w':'l'}">${r}</div>`).join("")
+    : `<div class="pill">–</div><div class="pill">–</div><div class="pill">–</div>`;
+  const streakTxt = s.streak ? `${s.streak}${s.streakType==="won"?"W":"L"}` : "—";
+  const streakClass = s.streakType==="won" ? "green" : (s.streakType==="lost" ? "red" : "");
+
+  document.getElementById("scoreboard").innerHTML = `
+    <div class="stat green"><div class="label">Wins</div><div class="val green">${s.wins}</div><div class="sub">tickets cashed</div></div>
+    <div class="stat red"><div class="label">Losses</div><div class="val red">${s.losses}</div><div class="sub">tickets busted</div></div>
+    <div class="stat amber"><div class="label">Win Rate</div><div class="val amber">${s.winRate.toFixed(1)}%</div><div class="sub">${s.wins+s.losses} settled</div></div>
+    <div class="stat ${streakClass}"><div class="label">Current Streak</div><div class="val ${streakClass}">${streakTxt}</div><div class="sub">last 3 →</div><div class="pills">${last3html}</div></div>
+    <div class="stat"><div class="label">Total Wagered</div><div class="val">${money(s.wagered)}</div><div class="sub">on settled bets</div></div>
+    <div class="stat green"><div class="label">Profit (winnings)</div><div class="val green">${money(s.profit)}</div><div class="sub">from won tickets</div></div>
+    <div class="stat ${s.net>=0?'green':'red'}"><div class="label">Net P&amp;L</div><div class="val ${s.net>=0?'green':'red'}">${money(s.net)}</div><div class="sub">bottom line</div></div>
+    <div class="stat ${s.roi>=0?'green':'red'}"><div class="label">ROI</div><div class="val ${s.roi>=0?'green':'red'}">${(s.roi>=0?'+':'')+s.roi.toFixed(1)}%</div><div class="sub">return on stake</div></div>
+    <div class="stat amber"><div class="label">Pending</div><div class="val amber">${s.pending}</div><div class="sub">${money(s.pendingStake)} at risk</div></div>
+  `;
+}
+
+/* ---------- Render: builder legs ---------- */
+function renderLegs(){
+  const wrap = document.getElementById("legList");
+  wrap.innerHTML = draftLegs.map((l,i)=>`
+    <div class="row leg" data-i="${i}">
+      <label><span>Pitcher</span><input data-k="pitcher" value="${esc(l.pitcher)}" placeholder="e.g. Tarik Skubal" /></label>
+      <label><span>Market</span><select data-k="market">${MARKETS.map(m=>`<option ${m===l.market?'selected':''}>${m}</option>`).join("")}</select></label>
+      <label><span>Line</span><input data-k="line" value="${esc(l.line)}" placeholder="6.5" /></label>
+      <label><span>Side</span><select data-k="side">${SIDES.map(sd=>`<option ${sd===l.side?'selected':''}>${sd}</option>`).join("")}</select></label>
+      <label><span>Odds (Am.)</span><input data-k="odds" value="${esc(l.odds)}" placeholder="-110" inputmode="numeric" /></label>
+      <button class="rmleg" data-rm="${i}" title="remove leg">×</button>
+    </div>
+  `).join("");
+
+  wrap.querySelectorAll("input,select").forEach(el=>{
+    el.addEventListener("input", e=>{
+      const i = +e.target.closest(".row").dataset.i;
+      const k = e.target.dataset.k;
+      draftLegs[i][k] = e.target.value;
+      if(k==="pitcher"){ draftLegs[i].personId=null; draftLegs[i].gamePk=null; } // typed manually → drop stored ids
+      renderSummary();
+    });
+  });
+  wrap.querySelectorAll("[data-rm]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const i = +b.dataset.rm;
+      draftLegs.splice(i,1);
+      if(draftLegs.length===0) draftLegs.push(newLeg());
+      renderLegs(); renderSummary();
+    });
+  });
+  document.getElementById("legsTitle").textContent = `LEGS · ${draftLegs.length}`;
+}
+
+function renderSummary(){
+  const decFromLegs = combinedDecimal(draftLegs);
+  const wager = +document.getElementById("wager").value || 0;
+  const toWinEl = document.getElementById("toWin");
+  const editingToWin = document.activeElement === toWinEl;
+
+  let dec, payout, profit;
+  if(decFromLegs){
+    // odds are on the legs — derive To Win from them and keep that field synced
+    dec = decFromLegs;
+    payout = wager*dec;
+    profit = payout - wager;
+    if(toWinEl && !editingToWin) toWinEl.value = wager ? profit.toFixed(2) : "";
+  } else {
+    // no odds entered — use the manually typed To Win amount as the source of truth
+    const toWin = +(toWinEl ? toWinEl.value : 0) || 0;
+    profit = toWin;
+    payout = wager + toWin;
+    dec = (wager && payout) ? payout/wager : 0;
+  }
+
+  document.getElementById("sumOdds").textContent = (dec && dec>1) ? fmtAm(decToAm(dec)) : "—";
+  document.getElementById("sumPayout").textContent = money(payout);
+  document.getElementById("sumProfit").textContent = money(profit);
+  document.getElementById("sumLegs").textContent = draftLegs.length;
+}
+
+// When the user types a desired To Win amount with odds present, back-calculate the
+// wager. With no odds, To Win is just a manual amount — leave the wager alone.
+function syncWagerFromToWin(){
+  const dec = combinedDecimal(draftLegs);
+  const toWin = +document.getElementById("toWin").value || 0;
+  const wagerEl = document.getElementById("wager");
+  if(dec && dec>1 && toWin){
+    wagerEl.value = (toWin/(dec-1)).toFixed(2);
+  }
+  renderSummary();
+}
+
+/* ---------- Render: board ---------- */
+function renderBoard(){
+  const board = document.getElementById("board");
+  let list = parlays.slice().sort((a,b)=> new Date(b.date)-new Date(a.date) || (b.createdAt-a.createdAt));
+  if(filter!=="all") list = list.filter(p=>p.status===filter);
+
+  if(list.length===0){
+    board.innerHTML = `<div class="empty"><span class="big">No tickets here</span>${filter==="all"?"Build a parlay on the left to get the board going.":"Nothing matches this filter."}</div>`;
+    return;
+  }
+
+  board.innerHTML = list.map(p=>{
+    const legs = p.legs.map((l,i)=>{
+      const res = l.result || "";
+      const mark = res==="hit" ? "✓" : res==="miss" ? "✗" : "○";
+      return `
+      <div class="leg-line ${res}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
+        <div class="num">${String(i+1).padStart(2,"0")}</div>
+        <div class="pitcher">${esc(l.pitcher||"—")}</div>
+        <div class="prop"><b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}</div>
+        <div class="odds">${l.odds!==""?fmtAm(Number(l.odds)):"—"}</div>
+        <div class="legmark">${mark}</div>
+      </div>`;}).join("");
+
+    const profitVal = p.status==="won" ? (p.payout - p.wager)
+                    : p.status==="lost" ? -p.wager : 0;
+    const profitClass = p.status==="won" ? "green" : p.status==="lost" ? "red" : "amber";
+    const profitLabel = p.status==="pending" ? "Potential" : "Result";
+    const profitShown = p.status==="pending" ? (p.payout - p.wager) : profitVal;
+
+    return `
+    <div class="ticket ${p.status}">
+      <div class="ticket-top">
+        <div class="meta">
+          <span class="badge ${p.status}">${p.status}</span>
+          <span class="legcount">${p.legs.length}-Leg Parlay</span>
+        </div>
+        <span class="date">${fmtDate(p.date)}</span>
+      </div>
+      <div class="ticket-legs">${legs}</div>
+      <div class="ticket-foot">
+        <div class="nums">
+          <div class="n"><div class="k">Wager</div><div class="v">${money(p.wager)}</div></div>
+          <div class="n"><div class="k">Odds</div><div class="v amber">${fmtAm(p.oddsAm)}</div></div>
+          <div class="n"><div class="k">Payout</div><div class="v">${money(p.payout)}</div></div>
+          <div class="n"><div class="k">${profitLabel}</div><div class="v ${profitClass}">${(profitShown>=0?"+":"")+money(profitShown).replace("-","")}</div></div>
+        </div>
+        <div class="ticket-actions">
+          ${p.status!=="won"?`<button class="btn sm win" data-act="won" data-id="${p.id}">Mark Won</button>`:""}
+          ${p.status!=="lost"?`<button class="btn sm lose" data-act="lost" data-id="${p.id}">Mark Lost</button>`:""}
+          ${p.status!=="pending"?`<button class="btn sm ghost" data-act="pending" data-id="${p.id}">Reset</button>`:""}
+          <button class="btn sm icon ghost" data-act="del" data-id="${p.id}" title="delete">🗑</button>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  board.querySelectorAll("[data-act]").forEach(b=>{
+    b.addEventListener("click", ()=>handleAct(b.dataset.act, b.dataset.id));
+  });
+  board.querySelectorAll("[data-legtoggle]").forEach(el=>{
+    el.addEventListener("click", ()=>cycleLegResult(el.dataset.id, +el.dataset.leg));
+  });
+}
+
+// Cycle an individual leg's result: blank → hit → miss → blank.
+// Lets you mark which pitchers hit even when the overall ticket lost.
+function cycleLegResult(id, idx){
+  const p = parlays.find(x=>x.id===id);
+  if(!p || !p.legs[idx]) return;
+  const cur = p.legs[idx].result || "";
+  p.legs[idx].result = cur==="" ? "hit" : cur==="hit" ? "miss" : "";
+  save(); renderBoard(); renderPitchers();
+}
+
+function handleAct(act, id){
+  const p = parlays.find(x=>x.id===id);
+  if(!p) return;
+  if(act==="del"){
+    if(!confirm("Delete this ticket permanently?")) return;
+    parlays = parlays.filter(x=>x.id!==id);
+    toast("Ticket deleted");
+  } else {
+    p.status = act;
+    p.settledAt = act==="pending" ? null : new Date().toISOString();
+    toast(act==="won"?"Cha-ching — marked WON":act==="lost"?"Marked lost":"Back to pending");
+  }
+  save(); renderAll();
+}
+
+/* ---------- Save parlay ---------- */
+document.getElementById("saveParlay").addEventListener("click", ()=>{
+  const legs = draftLegs.filter(l=>l.pitcher.trim()!=="");
+  if(legs.length===0){ toast("Add at least one pitcher leg"); return; }
+  const wager = +document.getElementById("wager").value;
+  if(!wager || wager<=0){ toast("Enter a wager amount"); return; }
+
+  const decFromLegs = combinedDecimal(draftLegs);
+  const toWinManual = +document.getElementById("toWin").value || 0;
+  let dec, payout;
+  if(decFromLegs){
+    // odds entered on the legs — use them
+    dec = decFromLegs;
+    payout = wager*dec;
+  } else if(toWinManual>0){
+    // no odds — fall back to the manual To Win amount
+    payout = wager + toWinManual;
+    dec = payout/wager;
+  } else {
+    toast("Enter odds on your legs, or a To Win amount"); return;
+  }
+  const date = document.getElementById("betDate").value || new Date().toISOString().slice(0,10);
+
+  parlays.push({
+    id: uid(),
+    createdAt: Date.now(),
+    date,
+    legs: legs.map(l=>({...l})),
+    wager,
+    oddsDec: dec,
+    oddsAm: decToAm(dec),
+    payout,
+    status:"pending",
+    settledAt:null
+  });
+  save();
+  // reset builder
+  draftLegs = [ newLeg() ];
+  document.getElementById("wager").value="";
+  document.getElementById("toWin").value="";
+  renderLegs(); renderSummary(); renderBoard(); renderScoreboard();
+  toast(`${legs.length}-leg parlay placed on the board`);
+});
+
+document.getElementById("addLeg").addEventListener("click", ()=>{
+  draftLegs.push(newLeg()); renderLegs(); renderSummary();
+  scheduleScrollToBuilder();
+});
+
+/* ---------- Tabs ---------- */
+document.getElementById("tabs").addEventListener("click", e=>{
+  const t = e.target.closest(".tab"); if(!t) return;
+  filter = t.dataset.f;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===t));
+  renderBoard();
+});
+
+document.getElementById("wager").addEventListener("input", renderSummary);
+document.getElementById("toWin").addEventListener("input", syncWagerFromToWin);
+
+/* ---------- Export / Import / Clear ---------- */
+document.getElementById("exportBtn").addEventListener("click", ()=>{
+  const blob = new Blob([JSON.stringify(parlays,null,2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "bullpen-parlays-"+new Date().toISOString().slice(0,10)+".json";
+  a.click();
+  toast("Exported "+parlays.length+" tickets");
+});
+document.getElementById("importBtn").addEventListener("click", ()=>document.getElementById("importFile").click());
+document.getElementById("importFile").addEventListener("change", e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    try{
+      const data = JSON.parse(r.result);
+      if(!Array.isArray(data)) throw 0;
+      parlays = data; save(); renderAll(); toast("Imported "+data.length+" tickets");
+    }catch(err){ toast("Invalid file"); }
+  };
+  r.readAsText(f);
+  e.target.value="";
+});
+document.getElementById("clearBtn").addEventListener("click", ()=>{
+  if(!confirm("Reset ALL data? This cannot be undone.")) return;
+  parlays=[]; save(); renderAll(); toast("All data cleared");
+});
+
+/* ---------- helpers ---------- */
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtDate(d){
+  if(!d) return "";
+  const dt = new Date(d+"T00:00:00");
+  if(isNaN(dt)) return d;
+  return dt.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}).toUpperCase();
+}
+let toastTimer;
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove("show"), 2600);
+}
+
+/* ---------- Analytics: cumulative P&L chart ---------- */
+function renderChart(){
+  const el = document.getElementById("chart");
+  const settled = parlays.filter(p=>p.status!=="pending")
+    .sort((a,b)=> new Date(a.settledAt||a.date)-new Date(b.settledAt||b.date) || a.createdAt-b.createdAt);
+
+  if(settled.length===0){
+    el.innerHTML = `<div class="empty"><span class="big">No data yet</span>Settle a few tickets and your bankroll line shows up here.</div>`;
+    return;
+  }
+
+  // cumulative net after each settled ticket
+  let run = 0;
+  const pts = settled.map(p=>{
+    run += (p.status==="won") ? (p.payout - p.wager) : -p.wager;
+    return { t:p.settledAt||p.date, y:run };
+  });
+  pts.unshift({ t:pts[0].t, y:0 }); // start at zero
+
+  const W=640, H=240, pad={l:48,r:14,t:16,b:26};
+  const iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
+  const ys=pts.map(p=>p.y);
+  let min=Math.min(0,...ys), max=Math.max(0,...ys);
+  if(min===max){ min-=1; max+=1; }
+  const range=max-min;
+  const X=i=> pad.l + (pts.length<2?0:i/(pts.length-1))*iw;
+  const Y=v=> pad.t + (1-(v-min)/range)*ih;
+
+  const line=pts.map((p,i)=>`${i?"L":"M"}${X(i).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+  const area=`${line} L${X(pts.length-1).toFixed(1)},${Y(min<0?0:min).toFixed(1)} L${X(0).toFixed(1)},${Y(min<0?0:min).toFixed(1)} Z`;
+  const last=pts[pts.length-1].y;
+  const stroke = last>=0 ? "var(--green)" : "var(--red)";
+  const fill = last>=0 ? "rgba(61,220,132,.14)" : "rgba(255,87,99,.14)";
+  const zeroY=Y(0);
+
+  // y gridlines (3)
+  const ticks=[min, min+range/2, max];
+  const grid=ticks.map(v=>`
+    <line class="grid" x1="${pad.l}" y1="${Y(v).toFixed(1)}" x2="${W-pad.r}" y2="${Y(v).toFixed(1)}" stroke="var(--line-soft)" stroke-width="1"/>
+    <text class="ax" x="${pad.l-8}" y="${(Y(v)+3).toFixed(1)}" text-anchor="end">${v>=0?"$":"-$"}${Math.abs(Math.round(v))}</text>`).join("");
+
+  const dots=pts.slice(1).map((p,i)=>`<circle cx="${X(i+1).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="2.6" fill="${stroke}"/>`).join("");
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${grid}
+    <line x1="${pad.l}" y1="${zeroY.toFixed(1)}" x2="${W-pad.r}" y2="${zeroY.toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 3"/>
+    <path d="${area}" fill="${fill}"/>
+    <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}
+    <text class="ax" x="${pad.l}" y="${H-8}">${fmtShort(pts[0].t)}</text>
+    <text class="ax" x="${W-pad.r}" y="${H-8}" text-anchor="end">${fmtShort(pts[pts.length-1].t)}</text>
+  </svg>`;
+}
+
+/* ---------- Analytics: by-pitcher ---------- */
+function renderPitchers(){
+  const el = document.getElementById("pitcherTable");
+  const settled = parlays.filter(p=>p.status!=="pending");
+  if(settled.length===0){
+    el.innerHTML = `<div class="empty"><span class="big">No pitchers yet</span>Settle tickets to see who carries your slips.</div>`;
+    return;
+  }
+  // attribute each settled parlay's net to every pitcher on the ticket, and count
+  // W–L per leg: an explicit hit/miss on a leg wins out over the ticket's result, so
+  // a pitcher who hit on a losing parlay still gets credited.
+  const map={};
+  settled.forEach(p=>{
+    const net = (p.status==="won") ? (p.payout-p.wager) : -p.wager;
+    const seen = new Set();
+    p.legs.forEach(l=>{
+      const n=(l.pitcher||"").trim(); if(!n) return;
+      const m = map[n] || (map[n]={name:n,w:0,l:0,net:0,tix:0,carried:0});
+      const res = l.result || (p.status==="won" ? "hit" : "miss");
+      if(res==="hit") m.w++; else if(res==="miss") m.l++;
+      // "carried": the pitcher hit but the ticket still lost
+      if(res==="hit" && p.status==="lost") m.carried++;
+      // tickets + net counted once per pitcher per ticket
+      if(!seen.has(n)){ seen.add(n); m.tix++; m.net+=net; }
+    });
+  });
+  const rows=Object.values(map).sort((a,b)=>b.net-a.net);
+  const maxAbs=Math.max(1,...rows.map(r=>Math.abs(r.net)));
+
+  el.innerHTML = `<table class="ptable">
+    <thead><tr><th>Pitcher</th><th>Tix</th><th>W–L</th><th>Win%</th><th title="Legs this pitcher hit on a parlay that still lost">Carried</th><th>Net</th></tr></thead>
+    <tbody>${rows.map(r=>{
+      const wr = (r.w+r.l)?(r.w/(r.w+r.l)*100):0;
+      const cls = r.net>=0?"pos":"neg";
+      const pct = Math.round(Math.abs(r.net)/maxAbs*100);
+      return `<tr>
+        <td>${esc(r.name)}</td>
+        <td>${r.tix}</td>
+        <td>${r.w}–${r.l}</td>
+        <td class="wr">${wr.toFixed(0)}%</td>
+        <td class="carried">${r.carried ? `<span class="carried-pill" title="Hit ${r.carried}× on a losing ticket">${r.carried}</span>` : "—"}</td>
+        <td class="${cls}"><div class="barwrap"><span>${(r.net>=0?"+":"-")+"$"+Math.abs(r.net).toFixed(0)}</span><div class="bar"><i style="width:${pct}%;background:${r.net>=0?'var(--green)':'var(--red)'}"></i></div></div></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function fmtShort(d){
+  if(!d) return "";
+  const dt=new Date(d);
+  if(isNaN(dt)) return String(d).slice(0,10);
+  return dt.toLocaleDateString(undefined,{month:"short",day:"numeric"});
+}
+
+/* ---------- CSV export ---------- */
+document.getElementById("csvBtn").addEventListener("click", ()=>{
+  if(parlays.length===0){ toast("Nothing to export"); return; }
+  const head=["Date","Status","Legs","Pitchers","Selections","Wager","CombinedOdds","Payout","Profit/Loss"];
+  const rows=parlays.map(p=>{
+    const pl = p.status==="won"?(p.payout-p.wager):p.status==="lost"?-p.wager:"";
+    const sel = p.legs.map(l=>`${l.pitcher} ${l.side} ${l.line} ${l.market} (${fmtAm(Number(l.odds))})`).join(" | ");
+    return [
+      p.date, p.status, p.legs.length,
+      p.legs.map(l=>l.pitcher).join("; "),
+      sel, p.wager, fmtAm(p.oddsAm), p.payout.toFixed(2),
+      pl===""?"":pl.toFixed(2)
+    ];
+  });
+  const csv=[head,...rows].map(r=>r.map(c=>{
+    const s=String(c).replace(/"/g,'""');
+    return /[",\n]/.test(s)?`"${s}"`:s;
+  }).join(",")).join("\r\n");
+  const blob=new Blob([csv],{type:"text/csv"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="bullpen-parlays-"+new Date().toISOString().slice(0,10)+".csv";
+  a.click();
+  toast("Exported CSV");
+});
+
+/* ============================================================
+   LIVE MLB DATA  (statsapi.mlb.com — free, CORS-enabled)
+   ============================================================ */
+const MLB = "https://statsapi.mlb.com/api/v1";
+const boxCache = {};   // gamePk -> boxscore json
+const statusCache = {};// date -> {gamePk: {state, away, home}}
+const pitcherStatCache = {}; // "season:id" -> stat
+const teamHitCache = {};     // "season:teamId" -> stat
+const teamHitHandCache = {}; // "season:teamId" -> {L:stat, R:stat} (vs LHP / vs RHP)
+const personCache = {};      // id -> people record (for throw hand)
+const gameCtxCache = {};     // gamePk -> {tempF, condition, wind, umpire}
+const leagueKCache = {};     // season -> K%
+let slateState = null;       // {games, statById, date} of last loaded slate
+let autoTimer = null;
+let recLegCount = 3;         // chosen parlay size for the suggestion (2–5)
+let lastK = null;            // {rows, leagueK} of the last Best-K analysis, for re-renders
+
+async function jget(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return r.json();
+}
+
+/* map our market -> boxscore pitching field (numeric markets) */
+const MARKET_STAT = {
+  "Strikeouts":"strikeOuts",
+  "Outs Recorded":"outs",
+  "Earned Runs Allowed":"earnedRuns",
+  "Hits Allowed":"hits",
+  "Walks Allowed":"baseOnBalls",
+  "Pitches Thrown":"numberOfPitches",
+  "Hits + Walks Allowed (WHIP)":"_hbb"
+};
+
+/* ---------- Load slate ---------- */
+async function loadSlate(){
+  const date = document.getElementById("slateDate").value;
+  if(!date){ setSlateStatus("Pick a date","err"); return; }
+  setSlateStatus("Loading probable starters…");
+  const slate = document.getElementById("slate");
+  slate.innerHTML = "";
+  try{
+    const data = await jget(`${MLB}/schedule?sportId=1&date=${date}&hydrate=probablePitcher,team,linescore`);
+    const games = (data.dates[0]?.games)||[];
+    if(games.length===0){ setSlateStatus("No games scheduled for that date","err"); slate.innerHTML=`<div class="empty"><span class="big">No games</span>Try another date.</div>`; return; }
+
+    // collect probable pitcher ids to fetch season stats in one pass
+    const ids = new Set();
+    games.forEach(g=>{
+      ["away","home"].forEach(s=>{ const pp=g.teams[s].probablePitcher; if(pp) ids.add(pp.id); });
+    });
+    const season = new Date(date).getFullYear();
+    const statById = {};
+    await Promise.all([...ids].map(async id=>{
+      statById[id] = await getPitcherStat(id, season);
+    }));
+
+    slateState = { games, statById, date, season };
+    slate.innerHTML = games.map(g=>matchupCard(g, statById)).join("");
+    wireSlate();
+    const live = games.filter(g=>g.status.abstractGameState==="Live").length;
+    setSlateStatus(`${games.length} games · ${ids.size} starters${live?` · ${live} live`:""}`,"ok");
+    document.getElementById("kResults").innerHTML="";
+
+    // if an odds key is saved, try to enrich with live lines (best-effort)
+    if(getOddsKey()) loadOdds(date, games).catch(()=>{});
+  }catch(e){
+    setSlateStatus("Couldn't reach MLB data ("+e.message+")","err");
+  }
+}
+
+function matchupCard(g, statById){
+  const away=g.teams.away, home=g.teams.home;
+  const a=pcardHTML(away,"away",g), h=pcardHTML(home,"home",g);
+  const state=g.status?.abstractGameState||"";
+  const live = state==="Live", fin = state==="Final";
+  const started = live || fin;
+
+  // game state line
+  let gline;
+  if(live){
+    const ls=g.linescore||{};
+    gline=`<span class="live-dot"></span>${esc(ls.inningState||"")} ${ordinal(ls.currentInning)} · ${ls.outs??0} out`;
+  } else if(fin){
+    gline=`Final`;
+  } else {
+    gline=`${fmtTime(g.gameDate)} · Scheduled`;
+  }
+
+  const aWin = fin && (away.score>home.score), hWin = fin && (home.score>away.score);
+  const scoreRow=(t,won)=>`<div class="score-row${won?" winner":""}">
+    <div class="team"><span class="ab">${esc(t.team.abbreviation||shortName(t.team.name))}</span><span class="rec">${t.leagueRecord?`${t.leagueRecord.wins}-${t.leagueRecord.losses}`:""}</span></div>
+    <div class="rs">${started&&t.score!=null?t.score:"–"}</div></div>`;
+
+  return `<div class="matchup${live?" live":""}" data-game="${g.gamePk}">
+    <div class="scorebox">
+      ${scoreRow(away,aWin)}
+      ${scoreRow(home,hWin)}
+      <div class="gstate${fin?" final":""}">${gline}</div>
+    </div>
+    ${a}${h}
+  </div>`;
+
+  function pcardHTML(side,key,g){
+    const pp=side.probablePitcher;
+    if(!pp) return `<div class="pcard"><div class="ptop"><span class="pname" style="color:var(--ink-faint)">TBD</span><span class="pteam">${esc(shortName(side.team.name))}</span></div></div>`;
+    const st=statById[pp.id];
+    const statline = st ? `
+      <div class="st">ERA <b>${st.era??"–"}</b></div>
+      <div class="st">K/9 <b>${st.strikeoutsPer9Inn??"–"}</b></div>
+      <div class="st">IP <b>${st.inningsPitched??"–"}</b></div>
+      <div class="st">WHIP <b>${st.whip??"–"}</b></div>
+      <div class="st">K <b>${st.strikeOuts??"–"}</b></div>
+      <div class="st">${st.wins??"–"}-${st.losses??"–"}</div>`
+      : `<div class="st tbd">no ${new Date(g.gameDate).getFullYear()} stats</div>`;
+    return `<div class="pcard" data-pid="${pp.id}" data-pname="${esc(pp.fullName)}" data-gamepk="${g.gamePk}" data-team="${esc(shortName(side.team.name))}">
+      <div class="ptop"><span class="pname">${esc(pp.fullName)}</span><span class="pteam">${esc(shortName(side.team.name))}</span></div>
+      <div class="pstats">${statline}</div>
+      <div class="odds-line" data-odds></div>
+      <div class="padd">
+        <button class="btn sm" data-add data-market="Strikeouts">+ Strikeouts</button>
+        <button class="btn sm ghost" data-add data-market="Outs Recorded">+ Outs</button>
+        <button class="btn sm ghost" data-add data-market="Earned Runs Allowed">+ ER</button>
+        <button class="btn sm ghost" data-add data-market="Pitching Win">+ Win</button>
+      </div>
+    </div>`;
+  }
+}
+
+function wireSlate(){
+  document.querySelectorAll("#slate [data-add]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const card=b.closest(".pcard");
+      addLegFromSlate({
+        pitcher: card.dataset.pname,
+        personId: +card.dataset.pid,
+        gamePk: +card.dataset.gamepk,
+        market: b.dataset.market
+      });
+    });
+  });
+}
+
+function addLegFromSlate({pitcher,personId,gamePk,market}){
+  // reuse the first empty draft leg, else append
+  let leg = draftLegs.find(l=>!l.pitcher.trim());
+  if(!leg){ leg=newLeg(); draftLegs.push(leg); }
+  leg.pitcher=pitcher; leg.personId=personId; leg.gamePk=gamePk;
+  leg.market=market;
+  leg.side = (market==="Pitching Win") ? "Yes" : "Over";
+  renderLegs(); renderSummary();
+  toast(`${pitcher} · ${market} added to builder`);
+  // Don't yank the page on every click — let the user stack several legs from the
+  // slate first, then scroll down to the builder once they've paused.
+  scheduleScrollToBuilder();
+}
+
+let _builderScrollTimer = null;
+function scheduleScrollToBuilder(){
+  clearTimeout(_builderScrollTimer);
+  _builderScrollTimer = setTimeout(()=>{
+    document.querySelector(".grid").scrollIntoView({behavior:"smooth",block:"start"});
+  }, 1400);
+}
+
+function setSlateStatus(msg,cls){
+  const el=document.getElementById("slateStatus");
+  el.textContent=msg; el.className="slate-status"+(cls?" "+cls:"");
+}
+function shortName(n){ return (n||"").replace(/^(Arizona|Atlanta|Baltimore|Boston|Chicago|Cincinnati|Cleveland|Colorado|Detroit|Houston|Kansas City|Los Angeles|Miami|Milwaukee|Minnesota|New York|Oakland|Athletics|Philadelphia|Pittsburgh|San Diego|San Francisco|Seattle|St\\. Louis|Tampa Bay|Texas|Toronto|Washington)\\s+/,""); }
+function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}); }catch(e){ return ""; } }
+function ordinal(n){ if(!n) return ""; const s=["th","st","nd","rd"],v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
+
+/* ---------- cached data fetchers ---------- */
+async function getPitcherStat(id, season){
+  const k=season+":"+id;
+  if(k in pitcherStatCache) return pitcherStatCache[k];
+  try{
+    const d=await jget(`${MLB}/people/${id}/stats?stats=season&group=pitching&season=${season}`);
+    const sp=d.stats?.[0]?.splits;
+    return pitcherStatCache[k]=(sp&&sp.length)?sp[0].stat:null;
+  }catch(e){ return pitcherStatCache[k]=null; }
+}
+async function getTeamHit(teamId, season){
+  const k=season+":"+teamId;
+  if(k in teamHitCache) return teamHitCache[k];
+  try{
+    const d=await jget(`${MLB}/teams/${teamId}/stats?stats=season&group=hitting&season=${season}`);
+    const sp=d.stats?.[0]?.splits;
+    return teamHitCache[k]=(sp&&sp.length)?sp[0].stat:null;
+  }catch(e){ return teamHitCache[k]=null; }
+}
+function parseInjury(desc){
+  const rest=desc.split(/injured list\.?/i)[1]; if(!rest) return "";
+  return rest.replace(/retroactive to [^.]*\.?/i,"").replace(/^\.\s*/,"").replace(/\.\s*$/,"").trim();
+}
+function parseRetro(desc){
+  const m=(desc||"").match(/retroactive to ([A-Za-z]+ \d+,?\s*\d{4})/i);
+  if(!m) return null;
+  const d=new Date(m[1]); return isNaN(d)?null:d.toISOString().slice(0,10);
+}
+const ilPlayerCache={}; // "season:id" -> {activation, placedDate, outStart, reason} | null
+async function getPlayerIL(id, season, asOf){
+  const key=season+":"+id;
+  if(!(key in ilPlayerCache)){
+    let info=null;
+    try{
+      const d=await jget(`${MLB}/transactions?playerId=${id}&startDate=${season}-01-01&endDate=${season}-12-31`);
+      const tx=(d.transactions||[]).filter(t=>t.date && /injured list/i.test(t.description||""));
+      const acts=tx.filter(t=>/activated/i.test(t.description)).sort((a,b)=>b.date.localeCompare(a.date));
+      if(acts.length){
+        const act=acts[0];
+        // the original "placed on the injured list" that began this stint (not transfers between 15/60-day)
+        const places=tx.filter(t=>/placed/i.test(t.description) && t.date<=act.date).sort((a,b)=>b.date.localeCompare(a.date));
+        const place=places[0];
+        info={
+          activation:act.date,
+          placedDate:place?place.date:null,
+          outStart:(place&&parseRetro(place.description))||(place?place.date:null),
+          reason:place?parseInjury(place.description):""
+        };
+      }
+    }catch(e){}
+    ilPlayerCache[key]=info;
+  }
+  const info=ilPlayerCache[key];
+  if(!info) return null;
+  const backDays=Math.max(0,Math.round((new Date(asOf)-new Date(info.activation))/864e5));
+  const daysOut=info.outStart?Math.max(0,Math.round((new Date(info.activation)-new Date(info.outStart))/864e5)):null;
+  return {...info, backDays, daysOut};
+}
+const gameLogCache={}; // "season:id" -> full splits
+async function getGameLog(id, season){
+  const key=season+":"+id;
+  if(key in gameLogCache) return gameLogCache[key];
+  try{
+    const d=await jget(`${MLB}/people/${id}/stats?stats=gameLog&group=pitching&season=${season}`);
+    return gameLogCache[key]=d.stats?.[0]?.splits||[];
+  }catch(e){ return gameLogCache[key]=[]; }
+}
+let teamInfoMap=null;
+async function getTeamInfo(){
+  if(teamInfoMap) return teamInfoMap;
+  teamInfoMap={};
+  try{ const d=await jget(`${MLB}/teams?sportId=1`); for(const t of d.teams) teamInfoMap[t.id]={abbr:t.abbreviation, lgId:t.league?.id, lgName:t.league?.name}; }catch(e){}
+  return teamInfoMap;
+}
+function lgAbbr(name){ return (name||"").replace("American League","AL").replace("National League","NL"); }
+const lgRankCache={}; // season -> {pid:{rank,total,lgName}}
+async function getLeagueRanks(season){
+  if(lgRankCache[season]) return lgRankCache[season];
+  const info=await getTeamInfo();
+  const map={};
+  try{
+    const d=await jget(`${MLB}/stats?stats=season&group=pitching&season=${season}&sportIds=1&sortStat=strikeOuts&limit=2000&playerPool=All`);
+    const splits=d.stats?.[0]?.splits||[];
+    const arr=[], seen=new Set();
+    for(const sp of splits){           // sorted SO desc → first row per player is their main stint
+      const pid=sp.player?.id, tid=sp.team?.id;
+      if(!pid||seen.has(pid)) continue;
+      seen.add(pid);
+      arr.push({pid, so:+sp.stat.strikeOuts||0, lgName:info[tid]?.lgName||""});
+    }
+    arr.sort((a,b)=>b.so-a.so);
+    const lgTotals={}; arr.forEach(x=>lgTotals[x.lgName]=(lgTotals[x.lgName]||0)+1);
+    const lgCount={};
+    arr.forEach((x,i)=>{                // whole-MLB rank + within-league rank (arr is SO-sorted)
+      const lr=(lgCount[x.lgName]=(lgCount[x.lgName]||0)+1);
+      map[x.pid]={ mlbRank:i+1, mlbTotal:arr.length, lgRank:lr, lgTotal:lgTotals[x.lgName], lgName:x.lgName };
+    });
+  }catch(e){}
+  return lgRankCache[season]=map;
+}
+async function getLeagueK(season){
+  if(season in leagueKCache) return leagueKCache[season];
+  try{
+    const d=await jget(`${MLB}/teams/stats?stats=season&group=hitting&season=${season}&sportIds=1`);
+    const sp=d.stats[0].splits;
+    const so=sp.reduce((s,x)=>s+(x.stat.strikeOuts||0),0);
+    const pa=sp.reduce((s,x)=>s+(x.stat.plateAppearances||0),0);
+    return leagueKCache[season]= pa? so/pa : 0.222;
+  }catch(e){ return leagueKCache[season]=0.222; }
+}
+
+/* pitcher throw hand ('L'/'R') */
+async function getPitcherHand(id){
+  if(id in personCache) return personCache[id]?.pitchHand?.code || null;
+  try{ const d=await jget(`${MLB}/people/${id}`); personCache[id]=d.people?.[0]||null; }
+  catch(e){ personCache[id]=null; }
+  return personCache[id]?.pitchHand?.code || null;
+}
+/* opposing lineup hitting splits vs LHP and vs RHP */
+async function getTeamHitVsHand(teamId, season){
+  const k=season+":"+teamId;
+  if(k in teamHitHandCache) return teamHitHandCache[k];
+  const res={L:null,R:null};
+  try{
+    const d=await jget(`${MLB}/teams/${teamId}/stats?stats=statSplits&group=hitting&season=${season}&sitCodes=vl,vr`);
+    (d.stats?.[0]?.splits||[]).forEach(sp=>{
+      const c=sp.split?.code;
+      if(c==="vl") res.L=sp.stat;   // vs left-handed pitching
+      if(c==="vr") res.R=sp.stat;   // vs right-handed pitching
+    });
+  }catch(e){}
+  return teamHitHandCache[k]=res;
+}
+/* day-of weather + home-plate umpire from the boxscore (when posted) */
+async function getGameContext(gamePk){
+  if(gamePk in gameCtxCache) return gameCtxCache[gamePk];
+  const ctx={tempF:null, condition:"", wind:"", umpire:""};
+  try{
+    const b=await getBox(gamePk);
+    if(Array.isArray(b.officials)){
+      const hp=b.officials.find(o=>/home plate/i.test(o.officialType||""));
+      if(hp) ctx.umpire=hp.official?.fullName||"";
+    }
+    const info=b.info||[];
+    const w=info.find(x=>/weather/i.test(x.label||""));
+    if(w){ ctx.condition=(w.value||"").replace(/\.$/,""); const m=ctx.condition.match(/(\d+)\s*degree/i); if(m) ctx.tempF=+m[1]; }
+    const wd=info.find(x=>/wind/i.test(x.label||""));
+    if(wd) ctx.wind=(wd.value||"").replace(/\.$/,"");
+  }catch(e){}
+  return gameCtxCache[gamePk]=ctx;
+}
+
+/* ---- environmental K factors (multipliers on the strikeout projection) ---- */
+// approximate strikeout park factors (>1 = more Ks; pitcher-friendly). Default 1.00.
+const PARK_K = {
+  "Oracle Park":1.04,"Petco Park":1.03,"T-Mobile Park":1.03,"loanDepot park":1.03,
+  "Citi Field":1.02,"Comerica Park":1.02,"Tropicana Field":1.02,"Citizens Bank Park":1.01,
+  "Kauffman Stadium":1.01,"Dodger Stadium":1.01,"Busch Stadium":1.00,"Yankee Stadium":1.00,
+  "Wrigley Field":1.00,"Chase Field":1.00,"American Family Field":1.00,"Truist Park":1.00,
+  "Target Field":1.00,"Progressive Field":1.00,"PNC Park":1.00,"Angel Stadium":1.00,
+  "Nationals Park":0.99,"Globe Life Field":0.99,"Great American Ball Park":0.99,"Oriole Park at Camden Yards":0.99,
+  "Minute Maid Park":0.99,"Daikin Park":0.99,"Rate Field":0.99,"Guaranteed Rate Field":0.99,
+  "Fenway Park":0.98,"Sutter Health Park":0.98,"George M. Steinbrenner Field":0.98,"Coors Field":0.95
+};
+function parkKFactor(name){ return PARK_K[name] || 1.00; }
+function weatherKFactor(t){
+  if(t==null) return 1.00;
+  if(t<45) return 1.03;
+  if(t<55) return 1.02;
+  if(t<65) return 1.01;
+  if(t<78) return 1.00;
+  if(t<88) return 0.99;
+  return 0.98;
+}
+/* workload / piggyback proxy from the game log (no live news feed, so this is a
+   deterministic stand-in: short rest, a heavy last outing, or a run of short
+   starts that hints at a piggyback/short leash all trim the projected workload) */
+function workloadAdjust(log, asOf){
+  const flags=[]; let factor=1.00;
+  const starts=(log||[]).filter(s=>+s.stat.gamesStarted>=1);
+  const last=starts[starts.length-1];
+  if(last){
+    const rest=Math.round((new Date(asOf)-new Date(last.date))/864e5);
+    if(rest>=0 && rest<4){ flags.push(`${rest}d rest`); factor*=0.94; }
+    else if(rest>=8){ flags.push(`${rest}d rest (rust)`); factor*=0.98; }
+    const pitches=+last.stat.numberOfPitches||0;
+    if(pitches>=105){ flags.push(`${pitches}p last out`); factor*=0.98; }
+  }
+  const recent=starts.slice(-3);
+  if(recent.length>=2){
+    const avgIp=recent.reduce((a,s)=>a+ipToNum(s.stat.inningsPitched),0)/recent.length;
+    if(avgIp<4.2){ flags.push("short starts — piggyback/short leash?"); factor*=0.90; }
+  }
+  return { factor, flags };
+}
+
+/* ============================================================
+   BEST K PLAY  (log5 strikeout projection + Poisson)
+   ============================================================ */
+function poissonGE(lambda, n){ // P(X >= n)
+  if(n<=0) return 1;
+  let cdf=0, term=Math.exp(-lambda);
+  for(let k=0;k<n;k++){ cdf+=term; term*=lambda/(k+1); }
+  return Math.max(0, Math.min(1, 1-cdf));
+}
+function projectK(pStat, oppHit, leagueK){
+  if(!pStat || !oppHit) return null;
+  const bf=+pStat.battersFaced, so=+pStat.strikeOuts, gs=+pStat.gamesStarted||0, gp=+pStat.gamesPlayed||gs;
+  if(!bf || !so) return null;
+  const pK = so/bf;                                   // pitcher K rate / batter
+  const oppK = (+oppHit.strikeOuts)/(+oppHit.plateAppearances); // lineup K rate
+  // log5: combine two rates relative to league
+  const num = (pK*oppK/leagueK);
+  const den = num + ((1-pK)*(1-oppK)/(1-leagueK));
+  const rate = den? num/den : pK;
+  // distinguish a real starter from a reliever opening a "bullpen game" using starter share.
+  const starterShare = gp ? gs/gp : 1;
+  let bfPerStart, bullpen=false, thin=false;
+  if(starterShare < 0.5){                 // mostly relief appearances → bullpen game / opener
+    bullpen = true; bfPerStart = 15;      // short staff outing expected
+  } else {                                // genuine starter (injury / call-up is fine)
+    bfPerStart = gs>0 ? bf/gs : 22;       // trust his per-start workload
+    if(gs < 4) thin = true;               // legit starter, just a small sample → noisier projection
+  }
+  bfPerStart = Math.max(12, Math.min(27, bfPerStart));// clamp to a realistic start length
+  let proj = Math.min(rate * bfPerStart, 12.5);       // hard ceiling — no human throws a 28-K game
+  return { proj, rate, pK, oppK, bfPerStart, bullpen, thin, gs, starterShare };
+}
+
+async function analyzeK(){
+  if(!slateState || !slateState.games.length){ toast("Load a slate first"); return; }
+  const btn=document.getElementById("analyzeK"); btn.disabled=true; const old=btn.textContent; btn.textContent="🔎 Crunching…";
+  const out=document.getElementById("kResults");
+  out.innerHTML=`<div class="kpanel"><h3>Analyzing strikeout matchups…</h3></div>`;
+  try{
+    const {games, statById, season}=slateState;
+    const leagueK=await getLeagueK(season);
+    const info=await getTeamInfo();
+    const lgRanks=await getLeagueRanks(season);
+    const rows=[];
+    for(const g of games){
+      for(const side of ["away","home"]){
+        const me=g.teams[side], opp=g.teams[side==="away"?"home":"away"];
+        const pp=me.probablePitcher; if(!pp) continue;
+        const pStat=statById[pp.id] || await getPitcherStat(pp.id, season);
+        // handedness: use the opponent lineup's split vs THIS pitcher's hand, fall back to overall
+        const hand=await getPitcherHand(pp.id);
+        const vsHand=await getTeamHitVsHand(opp.team.id, season);
+        const overallHit=await getTeamHit(opp.team.id, season);
+        const splitHit=(hand && vsHand[hand] && +vsHand[hand].plateAppearances>50) ? vsHand[hand] : null;
+        const oppHit=splitHit||overallHit;
+        const m=projectK(pStat, oppHit, leagueK);
+        if(!m) continue;
+        const back=await getPlayerIL(pp.id, season, slateState.date);
+        const ilBackDays = back ? back.backDays : null;
+        const ilDaysOut = back ? back.daysOut : null;
+        const log=await getGameLog(pp.id, season);
+        const l3=log.slice(-3).map(s=>({ k:s.stat.strikeOuts, opp:(info[s.opponent?.id]?.abbr)||shortName(s.opponent?.name||""), home:s.isHome }));
+        const startsSince = back ? log.filter(s=> s.date>=back.activation && (+s.stat.gamesStarted)>=1).length : null;
+        // environmental adjustments: park, weather, workload
+        const ctx=await getGameContext(g.gamePk);
+        const parkF=parkKFactor(g.venue?.name);
+        const weatherF=weatherKFactor(ctx.tempF);
+        const work=workloadAdjust(log, slateState.date);
+        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor);
+        m.projBase=m.proj; m.proj=adjProj;
+        rows.push({
+          name:pp.fullName, id:pp.id, gamePk:g.gamePk,
+          opp:shortName(opp.team.name), oppAb:opp.team.abbreviation||shortName(opp.team.name),
+          team:me.team.abbreviation||shortName(me.team.name),
+          ilBackDays, ilReason:(back&&back.reason)||"", ilDaysOut, startsSince,
+          so:+pStat.strikeOuts||0, ip:pStat.inningsPitched||"–", lgRank:lgRanks[pp.id]||null,
+          gamesStarted:+pStat.gamesStarted||0,
+          oppRecord: opp.leagueRecord ? `${opp.leagueRecord.wins}-${opp.leagueRecord.losses}` : "",
+          oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
+          venue: g.venue?.name || "",
+          hand, oppSplit:!!splitHit,
+          parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
+          temp:ctx.tempF, weather:ctx.condition, wind:ctx.wind, umpire:ctx.umpire,
+          startTime: fmtTime(g.gameDate),
+          l3,
+          ...m
+        });
+      }
+    }
+    if(!rows.length){ out.innerHTML=`<div class="kpanel"><h3>Not enough data</h3></div>`; return; }
+    rows.sort((a,b)=> (a.bullpen-b.bullpen) || (b.proj-a.proj)); // real starters first, bullpen games last
+    renderKResults(rows, leagueK);
+    annotateK(rows);
+  } finally { btn.disabled=false; btn.textContent=old; }
+}
+
+/* baseball innings ("123.1" = 123⅓) → decimal innings */
+function ipToNum(ip){
+  const m=String(ip==null?"":ip).match(/^(\d+)(?:\.(\d))?$/);
+  if(!m) return parseFloat(ip)||0;
+  const f=m[2]?+m[2]:0;
+  return (+m[1]) + (f===1?1/3:f===2?2/3:0);
+}
+/* short qualitative descriptors for the pitcher side, all derived from real stats */
+function pitcherNote(r){
+  const tags=[];
+  if(r.hand) tags.push(r.hand==="L"?"LHP":"RHP");
+  const ipN=ipToNum(r.ip);
+  if(ipN>=10 && r.so){ const k9=r.so/ipN*9; tags.push(`${k9>=11?Math.round(k9)+"+":k9.toFixed(1)} K/9`); }
+  if(r.lgRank){
+    if(r.lgRank.mlbRank===1) tags.push("MLB K leader");
+    else if(r.lgRank.lgRank===1) tags.push(`${lgAbbr(r.lgRank.lgName)} K leader`);
+    else if(r.lgRank.mlbRank<=10) tags.push(`#${r.lgRank.mlbRank} MLB K`);
+    else if(r.lgRank.lgRank<=15) tags.push(`#${r.lgRank.lgRank} ${lgAbbr(r.lgRank.lgName)} K`);
+  }
+  if(r.gamesStarted>0){ const kPer=r.so/r.gamesStarted; if(kPer) tags.push(`${kPer.toFixed(1)} K/start`); }
+  const last=r.l3&&r.l3.length?r.l3[r.l3.length-1].k:null;
+  if(last!=null && last>=9) tags.push(`${last} K last out 🔥`);
+  return tags.slice(0,4);
+}
+/* short qualitative descriptors for the lineup side (incl. park + weather, which
+   are folded into the projection) */
+function lineupNote(r, leagueK){
+  const tags=[];
+  if(r.oppRecord) tags.push(`${r.oppAb} ${r.oppRecord}`);
+  const diff=(r.oppK-leagueK)*100;
+  if(diff>=2) tags.push(r.oppSplit?`whiff-prone vs ${r.hand==="L"?"LHP":"RHP"}`:"whiff-prone lineup");
+  else if(diff>=0.7) tags.push("above-avg K lineup");
+  else if(diff<=-2) tags.push("tough contact");
+  else tags.push("avg contact");
+  if(r.venue) tags.push(`${r.venue}${r.parkF&&Math.abs(r.parkF-1)>=0.02?` (${r.parkF>1?"+":""}${((r.parkF-1)*100).toFixed(0)}% K)`:""}`);
+  if(r.temp!=null) tags.push(`${r.temp}°${r.weather&&!/^\d+\s*degree/i.test(r.weather)?" "+r.weather.replace(/^\d+\s*degrees?,?\s*/i,""):""}`);
+  return { tags:tags.slice(0,4), favorable: diff>=0.7 };
+}
+
+/* Build a parlay suggestion aimed at a high-K target (5+) from the most confident
+   arms, then grow it to ~2x payout while keeping confidence as high as possible.
+   Each leg takes the most aggressive 5+/6+/7+ target it still clears at the floor,
+   which means more payout per leg and fewer legs needed to reach 2x. */
+function estLegDecimal(p){
+  // realistic book price for a model prob, baking in ~4.5% hold (book shades the line)
+  const implied = Math.min(0.93, p + 0.045);
+  return 1/implied;
+}
+function recommendParlay(rows, nLegs){
+  const eligible = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5);
+  // adaptively relax the per-leg confidence floor until we have at least 2 legs
+  let cand=[];
+  for(const FLOOR of [0.64, 0.60, 0.56]){
+    cand = eligible.map(r=>{
+      let target=5, p=poissonGE(r.proj,5);
+      if(p<FLOOR) return null;                          // can't even clear 5+ confidently
+      for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=FLOOR){target=t;p=pt;} else break; }
+      return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line:target-0.5, p, dec:estLegDecimal(p) };
+    }).filter(Boolean);
+    if(cand.length>=2) break;
+  }
+  if(cand.length<2) return null;
+  cand.sort((a,b)=> b.proj-a.proj || b.dec-a.dec);     // best arms first (aggressive but confident)
+  const combDec = ls=>ls.reduce((a,c)=>a*c.dec,1);
+  const combP   = ls=>ls.reduce((a,c)=>a*c.p,1);
+  let legs;
+  if(nLegs){
+    legs = cand.slice(0, Math.min(nLegs, cand.length));  // user picked the leg count
+  } else {
+    legs = cand.slice(0,2);                              // auto: grow until ~2x payout
+    let i=2;
+    while(combDec(legs) < 2.0 && i<cand.length && legs.length<4){ legs.push(cand[i++]); }
+  }
+  const dec=combDec(legs);
+  return { legs, combined: combP(legs), dec, american: decToAm(dec), shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
+}
+
+function buildRecommendedParlay(legs){
+  if(!legs || !legs.length) return;
+  const hasWork = draftLegs.some(l=>l.pitcher.trim());
+  if(hasWork && !confirm("Replace the current builder with the suggested parlay?")) return;
+  draftLegs = legs.map(l=>{
+    const leg=newLeg();
+    leg.pitcher=l.name; leg.personId=l.id; leg.gamePk=l.gamePk;
+    leg.market="Strikeouts"; leg.side="Over"; leg.line=l.line.toFixed(1);
+    leg.odds=String(decToAm(l.dec));   // estimated price — overwrite with your book's number
+    return leg;
+  });
+  if(!draftLegs.length) draftLegs=[newLeg()];
+  renderLegs(); renderSummary();
+  toast(`Suggested ${legs.length}-leg parlay loaded — odds are estimates, swap in your book's`);
+  scheduleScrollToBuilder();
+}
+
+function renderKResults(rows, leagueK){
+  lastK={rows, leagueK};
+  const top=rows[0];
+  const rec=recommendParlay(rows, recLegCount);
+  const mlbTotal=rows.find(r=>r.lgRank)?.lgRank.mlbTotal||null;
+  const umpKnown=rows.some(r=>r.umpire);
+  const out=document.getElementById("kResults");
+  out.innerHTML=`<div class="kpanel">
+    <div class="top">
+      <span class="crown">👑</span>
+      <div>
+        <div class="who">${esc(top.name)}</div>
+        <div class="vs">${esc(top.team)} vs ${esc(top.oppAb)} · opp lineup K ${(top.oppK*100).toFixed(1)}%${top.oppSplit?` vs ${top.hand==="L"?"LHP":"RHP"}`:""} · his K ${(top.pK*100).toFixed(1)}%</div>
+      </div>
+      <div class="proj"><div class="big">${top.proj.toFixed(1)}</div><div class="lab">proj K · ${(poissonGE(top.proj,6)*100).toFixed(0)}% for 6+</div></div>
+    </div>
+    <div class="krec">
+      <div class="krec-head">
+        <span class="krec-title">🎟️ Suggested Parlay</span>
+        <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
+      </div>
+      ${rec ? `
+      <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ~${rec.dec.toFixed(2)}× (${fmtAm(rec.american)})</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
+      <div class="krec-sub">High-K (5+) targets from the most confident arms. Odds are model estimates — swap in your book's.</div>
+      <div class="krec-legs">${rec.legs.map(l=>`<div class="krec-leg"><span class="krec-name">${esc(l.name)}</span> <span class="krec-bet">Over ${l.line.toFixed(1)} K · ${l.target}+</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtAm(decToAm(l.dec))}</span></div>`).join("")}</div>
+      <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
+      ` : `<div class="krec-sub">Not enough confident 5+ K legs on this slate to build a parlay.</div>`}
+    </div>
+    <table class="krank">
+      <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th>L3 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th title="MLB strikeout rank${mlbTotal?` among ${mlbTotal} qualified pitchers`:""}">K Rk${mlbTotal?` <span style="color:var(--ink-faint)">/${mlbTotal}</span>`:""}</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
+      <tbody>${rows.map((r,i)=>`<tr data-pid="${r.id}" data-game="${r.gamePk}" data-name="${esc(r.name)}">
+        <td>${i+1}</td>
+        <td>${esc(r.name)}${r.bullpen?` <span class="flag bullpen" title="reliever/opener — likely a bullpen game, short outing">🪣 BULLPEN GAME</span>`:r.thin?` <span class="flag thin" title="real starter with few games (injury/call-up) — smaller sample">thin data</span>`:""}${(r.workFlags||[]).map(f=>` <span class="flag work" title="workload signal from recent game logs (not a news feed)">${esc(f)}</span>`).join("")}${r.ilBackDays!=null&&r.ilBackDays<=30?` <span class="flag il" title="days since activated from the injured list — may be on a pitch/innings limit">IL ${r.ilBackDays}d${r.startsSince!=null?` · ${r.startsSince} GS`:""}</span> <span class="flag out" title="length of the IL stint and the injury">${r.ilDaysOut!=null?`${r.ilDaysOut}d`:"?"} · ${r.ilReason?esc(r.ilReason):"reason n/a"}</span>`:""}</td>
+        <td style="text-align:left;font-family:'JetBrains Mono';font-size:11px;color:var(--ink-dim)">${esc(r.team)} v ${esc(r.oppAb)}<div class="cell-note" style="margin-left:0">${esc(r.startTime||"")}${r.umpire?` · HP ${esc(r.umpire.split(" ").slice(-1)[0])}`:""}</div></td>
+        <td style="font-family:'JetBrains Mono';font-size:11px;color:var(--chalk)">${r.l3&&r.l3.length?r.l3.map(g=>`${g.k} ${g.home?"v":"@"}${esc(g.opp)}`).join(" · "):"–"}</td>
+        <td style="font-family:'JetBrains Mono';font-size:11px">${r.so} / ${esc(String(r.ip))} / ${(r.pK*100).toFixed(1)}%${(()=>{const t=pitcherNote(r);return t.length?`<div class="cell-note">${t.map(esc).join(" · ")}</div>`:"";})()}</td>
+        ${(()=>{const ln=lineupNote(r,leagueK);return `<td style="font-family:'JetBrains Mono';font-size:11px;color:${r.oppK>=leagueK?'var(--green)':'var(--red)'}" title="opposing lineup K-rate${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%">${(r.oppK*100).toFixed(1)}% <span style="color:var(--ink-faint)">${r.oppK>=leagueK?"▲":"▼"}${(Math.abs(r.oppK-leagueK)*100).toFixed(1)}</span>${ln.favorable?' ✅':''}<div class="cell-note">${ln.tags.map(esc).join(" · ")}</div></td>`;})()}
+        <td style="font-family:'JetBrains Mono';font-size:11px" title="${r.lgRank?esc(r.lgRank.lgName):""}">${r.lgRank?`<span class="pj">#${r.lgRank.mlbRank}</span> <span style="color:var(--ink-faint)">#${r.lgRank.lgRank} ${esc(lgAbbr(r.lgRank.lgName))}</span>`:"–"}</td>
+        <td class="pj">${r.proj.toFixed(1)}</td>
+        <td>${(poissonGE(r.proj,5)*100).toFixed(0)}%</td>
+        <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%</td>
+        <td>${(poissonGE(r.proj,7)*100).toFixed(0)}%</td>
+      </tr>`).join("")}</tbody>
+    </table>
+    <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
+      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), scaled by batters/start and adjusted for park, temperature & recent workload${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg. Projection, not a guarantee.
+    </div>
+  </div>`;
+  out.querySelectorAll(".krank tbody tr").forEach(tr=>{
+    tr.addEventListener("click",()=>{
+      const r=rows.find(x=>x.id==tr.dataset.pid);
+      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts"});
+      // pre-fill a sensible line at the rounded projection .5 under
+      const leg=draftLegs.find(l=>l.personId==tr.dataset.pid);
+      if(leg && !leg.line){ leg.line=(Math.round(r.proj)-0.5).toFixed(1); leg.side="Over"; renderLegs(); renderSummary(); }
+    });
+  });
+  out.querySelectorAll(".legbtn").forEach(b=>{
+    b.addEventListener("click", ()=>{ recLegCount=+b.dataset.legs; renderKResults(lastK.rows, lastK.leagueK); });
+  });
+  const recBtn=out.querySelector("#buildRec");
+  if(recBtn && rec){ recBtn.addEventListener("click", ()=>buildRecommendedParlay(rec.legs)); }
+  document.getElementById("kResults").scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+
+/* drop projK badges onto the slate pitcher cards */
+function annotateK(rows){
+  const best=rows[0]?.id;
+  rows.forEach(r=>{
+    const card=document.querySelector(`.pcard[data-pid="${r.id}"][data-gamepk="${r.gamePk}"]`);
+    if(!card) return;
+    card.querySelectorAll(".kbadge").forEach(b=>b.remove());
+    const badge=document.createElement("span");
+    const ilBack = r.ilBackDays!=null && r.ilBackDays<=30;
+    badge.className="kbadge"+(r.id===best?" lead":"")+(r.bullpen?" bp":"");
+    badge.textContent=`${r.proj.toFixed(1)} proj K`+(r.bullpen?" 🪣":r.thin?" ~":"");
+    badge.title=(r.bullpen?"bullpen game / opener. ":r.thin?"thin sample (injured/call-up starter). ":"")+(ilBack?`back from IL ${r.ilBackDays}d ago${r.ilReason?" — "+r.ilReason:""}`:"");
+    card.querySelector(".pname").after(badge);
+    // last-3-starts K (with opponents) + IL chips on the stat line
+    const stats=card.querySelector(".pstats");
+    if(stats){
+      stats.querySelectorAll(".st.dyn").forEach(x=>x.remove());
+      if(r.l3&&r.l3.length){ const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`L3 K <b>${r.l3.map(g=>`${g.k}${g.home?"v":"@"}${esc(g.opp)}`).join(" ")}</b>`; stats.appendChild(c); }
+      { const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`SO/IP <b>${r.so}/${esc(String(r.ip))}</b>`; stats.appendChild(c); }
+      { const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`K% <b>${(r.pK*100).toFixed(1)}%</b>`; stats.appendChild(c); }
+      if(r.lgRank){ const c=document.createElement("div"); c.className="st dyn"; c.title=r.lgRank.lgName; c.innerHTML=`MLB K <b>#${r.lgRank.mlbRank}</b>/${r.lgRank.mlbTotal} (#${r.lgRank.lgRank} ${esc(lgAbbr(r.lgRank.lgName))})`; stats.appendChild(c); }
+      if(ilBack){
+        const a=document.createElement("div"); a.className="st dyn il"; a.innerHTML=`IL ${r.ilBackDays}d${r.startsSince!=null?` · ${r.startsSince} GS`:""}`; stats.appendChild(a);
+        const b=document.createElement("div"); b.className="st dyn out"; b.innerHTML=`${r.ilDaysOut!=null?`${r.ilDaysOut}d`:"?"} · ${r.ilReason?esc(r.ilReason):"reason n/a"}`; stats.appendChild(b);
+      }
+    }
+  });
+}
+
+/* ============================================================
+   AUTO-GRADE  (settle pending tickets from final boxscores)
+   ============================================================ */
+async function getStatusMap(date){
+  if(statusCache[date]) return statusCache[date];
+  const d = await jget(`${MLB}/schedule?sportId=1&date=${date}&hydrate=probablePitcher`);
+  const map={};
+  (d.dates[0]?.games||[]).forEach(g=>{
+    map[g.gamePk]={ state:g.status.abstractGameState, codedState:g.status.detailedState };
+    ["away","home"].forEach(s=>{
+      const pp=g.teams[s].probablePitcher;
+      if(pp) map["name:"+pp.fullName.toLowerCase()]=g.gamePk;
+    });
+  });
+  statusCache[date]=map; return map;
+}
+async function getBox(gamePk){
+  if(boxCache[gamePk]) return boxCache[gamePk];
+  const b = await jget(`${MLB}/game/${gamePk}/boxscore`);
+  boxCache[gamePk]=b; return b;
+}
+function findPitcher(box, personId, name){
+  for(const side of ["away","home"]){
+    const players=box.teams[side].players;
+    if(personId && players["ID"+personId]) return players["ID"+personId];
+  }
+  if(name){
+    const low=name.toLowerCase();
+    for(const side of ["away","home"]){
+      const players=box.teams[side].players;
+      for(const k in players){ if(players[k].person?.fullName?.toLowerCase()===low) return players[k]; }
+    }
+  }
+  return null;
+}
+/* returns 'win' | 'loss' | 'push' | null(ungradable) for one leg */
+async function gradeLeg(leg, date){
+  let gamePk=leg.gamePk;
+  const smap=await getStatusMap(date);
+  if(!gamePk){ gamePk=smap["name:"+(leg.pitcher||"").toLowerCase()]; }
+  if(!gamePk) return null;
+  if(smap[gamePk] && smap[gamePk].state!=="Final") return null;
+  const box=await getBox(gamePk);
+  const pl=findPitcher(box, leg.personId, leg.pitcher);
+  if(!pl || !pl.stats?.pitching || Object.keys(pl.stats.pitching).length===0) return "push"; // scratched / didn't pitch → books void the leg
+  const ps=pl.stats.pitching;
+  const note=(ps.note||"").toUpperCase();   // e.g. (W, 13-6) / (L, 1-3)
+  const line=parseFloat(leg.line);
+
+  if(leg.market==="Pitching Win"){
+    const won=note.includes("(W");
+    return ( (leg.side==="Yes"&&won) || (leg.side==="No"&&!won) ) ? "win":"loss";
+  }
+  if(leg.market==="Record a No-Decision"){
+    const decided=note.includes("(W")||note.includes("(L");
+    const nd=!decided;
+    return ( (leg.side==="Yes"&&nd) || (leg.side==="No"&&!nd) ) ? "win":"loss";
+  }
+  // numeric markets
+  let actual;
+  if(leg.market==="Hits + Walks Allowed (WHIP)") actual=(ps.hits||0)+(ps.baseOnBalls||0);
+  else actual = ps[MARKET_STAT[leg.market]];
+  if(actual===undefined || isNaN(line)) return null;
+  if(actual===line) return "push";
+  const over = actual>line;
+  return ( (leg.side==="Over"&&over) || (leg.side==="Under"&&!over) ) ? "win":"loss";
+}
+
+async function gradeAll(){
+  const pend=parlays.filter(p=>p.status==="pending");
+  if(pend.length===0){ toast("No pending tickets to settle"); return; }
+  const btn=document.getElementById("gradeBtn");
+  btn.disabled=true; const old=btn.textContent; btn.textContent="⚾ Settling…";
+  let settled=0, skipped=0;
+  try{
+    for(const p of pend){
+      try{
+        const res=await Promise.all(p.legs.map(l=>gradeLeg(l,p.date)));
+        if(res.some(r=>r===null)){ skipped++; continue; }      // a game not final / unresolved
+        if(res.some(r=>r==="loss")){ p.status="lost"; }
+        else if(res.every(r=>r==="push")){ continue; }          // whole ticket pushed → leave pending
+        else { p.status="won"; }
+        p.settledAt=new Date().toISOString();
+        settled++;
+      }catch(e){ skipped++; }
+    }
+    save(); renderAll();
+    toast(`Settled ${settled} ticket${settled!==1?"s":""}${skipped?` · ${skipped} not final yet`:""}`);
+  } finally { btn.disabled=false; btn.textContent=old; }
+}
+
+/* ============================================================
+   LIVE ODDS  (The Odds API — optional, user key)
+   ============================================================ */
+function getOddsKey(){ return localStorage.getItem("bullpen.oddskey")||""; }
+const ODDS_MARKET = { "Strikeouts":"pitcher_strikeouts" };
+async function loadOdds(date, games){
+  const key=getOddsKey(); if(!key) return;
+  setSlateStatus("Fetching live strikeout props…");
+  // map MLB matchups -> odds-api events by team name + date
+  const events=await jget(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${key}`)
+    .catch(()=>null);
+  if(!events) { setSlateStatus("Odds: events fetch failed (check key/plan)","err"); return; }
+  // For each game on screen, find matching event and pull strikeout props
+  for(const g of games){
+    const homeName=g.teams.home.team.name, awayName=g.teams.away.team.name;
+    const ev=events.find(e=> e.home_team===homeName && e.away_team===awayName);
+    if(!ev) continue;
+    try{
+      const odd=await jget(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${ev.id}/odds?apiKey=${key}&regions=us&markets=pitcher_strikeouts&oddsFormat=american`);
+      applyOdds(g.gamePk, odd);
+    }catch(e){/* props may need paid plan */}
+  }
+  setSlateStatus("Live strikeout props loaded","ok");
+}
+function applyOdds(gamePk, odd){
+  const book=odd.bookmakers?.[0]; if(!book) return;
+  const mkt=book.markets?.find(m=>m.key==="pitcher_strikeouts"); if(!mkt) return;
+  // outcomes: {name:'Over'/'Under', description:pitcherName, point, price}
+  document.querySelectorAll(`.matchup[data-game="${gamePk}"] .pcard[data-pid]`).forEach(card=>{
+    const name=card.dataset.pname.toLowerCase();
+    const outs=mkt.outcomes.filter(o=>(o.description||"").toLowerCase()===name);
+    if(!outs.length) return;
+    const cont=card.querySelector("[data-odds]");
+    cont.innerHTML=`<span class="pteam">K props:</span>`+outs.map(o=>
+      `<span class="odds-chip" data-pick data-side="${o.name}" data-line="${o.point}" data-price="${o.price}">${o.name} ${o.point} (${fmtAm(o.price)})</span>`
+    ).join("");
+    cont.querySelectorAll("[data-pick]").forEach(ch=>ch.addEventListener("click",()=>{
+      let leg=draftLegs.find(l=>!l.pitcher.trim()); if(!leg){leg=newLeg();draftLegs.push(leg);}
+      leg.pitcher=card.dataset.pname; leg.personId=+card.dataset.pid; leg.gamePk=+card.dataset.gamepk;
+      leg.market="Strikeouts"; leg.side=ch.dataset.side; leg.line=ch.dataset.line; leg.odds=ch.dataset.price;
+      renderLegs(); renderSummary(); toast(`${card.dataset.pname} K ${ch.dataset.side} ${ch.dataset.line} added`);
+      document.querySelector(".grid").scrollIntoView({behavior:"smooth",block:"start"});
+    }));
+  });
+}
+
+/* ---------- wire live-data controls ---------- */
+document.getElementById("loadSlate").addEventListener("click", loadSlate);
+document.getElementById("analyzeK").addEventListener("click", analyzeK);
+document.getElementById("refreshSlate").addEventListener("click", loadSlate);
+document.getElementById("autoRefresh").addEventListener("change", e=>{
+  clearInterval(autoTimer);
+  if(e.target.checked){ autoTimer=setInterval(loadSlate, 45000); toast("Auto-refresh on (45s)"); }
+});
+document.getElementById("gradeBtn").addEventListener("click", gradeAll);
+document.getElementById("oddsSettingsBtn").addEventListener("click", ()=>{
+  const el=document.getElementById("oddsSettings"); el.hidden=!el.hidden;
+  document.getElementById("oddsKey").value=getOddsKey();
+});
+document.getElementById("saveOddsKey").addEventListener("click", ()=>{
+  const v=document.getElementById("oddsKey").value.trim();
+  localStorage.setItem("bullpen.oddskey", v);
+  toast(v?"Odds key saved":"Odds key cleared");
+  document.getElementById("oddsSettings").hidden=true;
+});
+
+function renderAll(){ renderScoreboard(); renderBoard(); renderChart(); renderPitchers(); }
+
+/* ============================================================
+   CLOUD SYNC  (Supabase REST + a private sync code)
+   ============================================================ */
+const SYNC = {
+  get url(){ return localStorage.getItem("bullpen.sb.url")||""; },
+  get key(){ return localStorage.getItem("bullpen.sb.key")||""; },
+  get code(){ return localStorage.getItem("bullpen.sb.code")||""; },
+  set url(v){ localStorage.setItem("bullpen.sb.url", v); },
+  set key(v){ localStorage.setItem("bullpen.sb.key", v); },
+  set code(v){ v?localStorage.setItem("bullpen.sb.code", v):localStorage.removeItem("bullpen.sb.code"); }
+};
+function syncReady(){ return SYNC.url && SYNC.key && SYNC.code; }
+function sbHeaders(){ return { apikey:SYNC.key, Authorization:"Bearer "+SYNC.key, "Content-Type":"application/json" }; }
+const TABLE="parlays_sync";
+
+function setSync(state, msg){
+  const pill=document.getElementById("syncState");
+  pill.className="syncpill"+(state==="on"?" on":state==="err"?" err":state==="busy"?" busy":"");
+  pill.textContent= state==="on"?"SYNCED":state==="busy"?"SYNCING":state==="err"?"ERROR":"OFF";
+  if(msg!==undefined) document.getElementById("syncMsg").textContent=msg;
+  const note=document.getElementById("storeNote");
+  if(state==="on"){ note.textContent="synced to the cloud ☁"; note.classList.add("synced"); }
+  else { note.textContent="data saved locally in this browser"; note.classList.remove("synced"); }
+}
+
+async function cloudGet(){
+  const r=await fetch(`${SYNC.url}/rest/v1/${TABLE}?code=eq.${SYNC.code}&select=data,updated_at`, {headers:sbHeaders()});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  const rows=await r.json();
+  return rows[0]||null;
+}
+async function cloudPush(){
+  if(!syncReady()) return;
+  setSync("busy","saving…");
+  const body=[{ code:SYNC.code, data:parlays, updated_at:localUpdatedAt||new Date().toISOString() }];
+  const r=await fetch(`${SYNC.url}/rest/v1/${TABLE}?on_conflict=code`, {
+    method:"POST", headers:{...sbHeaders(), Prefer:"resolution=merge-duplicates,return=minimal"}, body:JSON.stringify(body)
+  });
+  if(!r.ok){ setSync("err","push failed ("+r.status+")"); throw new Error("push "+r.status); }
+  setSync("on","saved "+new Date().toLocaleTimeString());
+}
+let pushTimer;
+function schedulePush(){ if(!syncReady()) return; clearTimeout(pushTimer); pushTimer=setTimeout(()=>cloudPush().catch(()=>{}), 1500); }
+
+/* reconcile local <-> cloud by last-write-wins */
+async function syncNow(silent){
+  if(!syncReady()){ if(!silent) setSync("off","Add config + a code first"); return; }
+  try{
+    setSync("busy","checking cloud…");
+    const row=await cloudGet();
+    if(!row){ await cloudPush(); return; }           // nothing in cloud yet → seed it
+    if((row.updated_at||"") > (localUpdatedAt||"")){  // cloud is newer → pull
+      applyingRemote=true;
+      parlays=Array.isArray(row.data)?row.data:[];
+      localUpdatedAt=row.updated_at;
+      localStorage.setItem("bullpen.updatedAt", localUpdatedAt);
+      localStorage.setItem(LS_KEY, JSON.stringify(parlays));
+      applyingRemote=false;
+      renderAll();
+      setSync("on","pulled latest from cloud");
+    } else {                                          // local newer/equal → push
+      await cloudPush();
+    }
+  }catch(e){ setSync("err", e.message); }
+}
+
+/* ---------- sync UI wiring ---------- */
+document.getElementById("syncBtn").addEventListener("click", ()=>{
+  const p=document.getElementById("syncPanel"); p.hidden=!p.hidden;
+  if(!p.hidden){
+    document.getElementById("sbUrl").value=SYNC.url;
+    document.getElementById("sbKey").value=SYNC.key;
+    document.getElementById("sbCode").value=SYNC.code;
+    p.scrollIntoView({behavior:"smooth",block:"center"});
+  }
+});
+document.getElementById("sbSaveCfg").addEventListener("click", ()=>{
+  SYNC.url=document.getElementById("sbUrl").value.trim().replace(/\/$/,"");
+  SYNC.key=document.getElementById("sbKey").value.trim();
+  setSync(syncReady()?"on":"off", "Config saved");
+  if(syncReady()) syncNow();
+});
+document.getElementById("sbNew").addEventListener("click", async ()=>{
+  if(!SYNC.url||!SYNC.key){ setSync("err","Save your Supabase URL + key first"); return; }
+  SYNC.code=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2));
+  document.getElementById("sbCode").value=SYNC.code;
+  localUpdatedAt=new Date().toISOString(); localStorage.setItem("bullpen.updatedAt", localUpdatedAt);
+  try{ await cloudPush(); setSync("on","New code created & data uploaded. Copy it to your other devices."); }
+  catch(e){ setSync("err", e.message); }
+});
+document.getElementById("sbConnect").addEventListener("click", async ()=>{
+  const c=document.getElementById("sbCode").value.trim();
+  if(!c){ setSync("err","Paste a sync code"); return; }
+  if(!SYNC.url||!SYNC.key){ setSync("err","Save your Supabase URL + key first"); return; }
+  SYNC.code=c; localUpdatedAt=""; // force pull of remote
+  await syncNow();
+});
+document.getElementById("sbSyncNow").addEventListener("click", ()=>syncNow());
+document.getElementById("sbCopy").addEventListener("click", ()=>{
+  if(!SYNC.code){ setSync("err","No code yet"); return; }
+  navigator.clipboard?.writeText(SYNC.code); toast("Sync code copied");
+});
+document.getElementById("sbDisconnect").addEventListener("click", ()=>{
+  SYNC.code=""; setSync("off","Disconnected (data stays local)");
+});
+
+/* ---------- theme (light / dark) ---------- */
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t);
+  const ti=document.querySelector("#themeToggle .ti");
+  if(ti) ti.textContent = t==="light" ? "☀️" : "🌙";
+}
+(function initTheme(){
+  let t=localStorage.getItem("bullpen.theme");
+  if(!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  applyTheme(t);
+})();
+document.getElementById("themeToggle").addEventListener("click", ()=>{
+  const next = document.documentElement.getAttribute("data-theme")==="light" ? "dark" : "light";
+  localStorage.setItem("bullpen.theme", next);
+  applyTheme(next);
+});
+
+/* ---------- init ---------- */
+// clicking anywhere in a date field opens the native calendar (where supported)
+document.querySelectorAll('input[type="date"]').forEach(el=>{
+  el.addEventListener("click", ()=>{ try{ el.showPicker(); }catch(e){} });
+});
+document.getElementById("betDate").value = new Date().toISOString().slice(0,10);
+document.getElementById("slateDate").value = new Date().toISOString().slice(0,10);
+renderLegs(); renderSummary(); renderAll();
+if(syncReady()){ setSync("on",""); syncNow(true); } else setSync("off","");
+</script>
+</body>
+</html>
