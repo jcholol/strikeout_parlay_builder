@@ -34,7 +34,12 @@ export default {
       return cors(json({ error: "only /trade-api/* is proxied" }, 400));
     }
 
-    const target = KALSHI_ORIGIN + path + url.search;
+    // drop empty-valued query params (e.g. "?limit=") — Kalshi rejects those
+    const sp = url.searchParams;
+    for (const k of [...sp.keys()]) if (sp.get(k) === "") sp.delete(k);
+    const search = sp.toString() ? "?" + sp.toString() : "";
+
+    const target = KALSHI_ORIGIN + path + search;
     try {
       // IMPORTANT:
       //  - no Origin header (that's what Kalshi blocks for browsers)
