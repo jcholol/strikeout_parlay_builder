@@ -35,12 +35,19 @@ export default {
 
     const target = KALSHI_ORIGIN + url.pathname + url.search;
     try {
-      // IMPORTANT: build a clean request with NO Origin header (that's what Kalshi blocks)
-      const upstream = await fetch(target, { method: "GET", headers: { accept: "application/json" } });
+      // IMPORTANT:
+      //  - no Origin header (that's what Kalshi blocks for browsers)
+      //  - edge-cache successful responses ~45s so we don't hit Kalshi on every page
+      //    load (avoids 429 rate limits; all visitors share one cached response)
+      const upstream = await fetch(target, {
+        method: "GET",
+        headers: { accept: "application/json", "user-agent": "bullpen-kalshi-proxy" },
+        cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": 45, "300-599": 0 } },
+      });
       const body = await upstream.text();
       return cors(new Response(body, {
         status: upstream.status,
-        headers: { "content-type": "application/json", "cache-control": "public, max-age=30" },
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=45" },
       }));
     } catch (e) {
       return cors(json({ error: "upstream fetch failed", detail: String(e) }, 502));
