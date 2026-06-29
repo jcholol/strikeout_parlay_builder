@@ -253,7 +253,9 @@
   .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
   .key-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;
     background:var(--ink-faint);box-shadow:none;transition:.15s}
+  .key-dot.saved{background:var(--amber);box-shadow:0 0 8px var(--amber)}
   .key-dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  #oddsSettingsBtn.saved{border-color:var(--amber-dim);color:var(--amber)}
   #oddsSettingsBtn.on{border-color:var(--green-dim);color:var(--green)}
 
   .legs-head{
@@ -1907,31 +1909,38 @@ function getOddsKey(){ return localStorage.getItem("bullpen.oddskey")||""; }
 const ODDS_MARKET = { "Strikeouts":"pitcher_strikeouts" };
 async function loadOdds(date, games){
   const key=getOddsKey(); if(!key) return;
+  oddsLive=false; updateOddsKeyDot();
   setSlateStatus("Fetching live strikeout props…");
   // map MLB matchups -> odds-api events by team name + date
   const events=await jget(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${key}`)
     .catch(()=>null);
-  if(!events) { setSlateStatus("Odds: events fetch failed (check key/plan)","err"); return; }
+  if(!events) { setSlateStatus("Odds: events fetch failed (check key/plan)","err"); updateOddsKeyDot(); return; }
   // For each game on screen, find matching event and pull strikeout props
+  let applied=0;
   for(const g of games){
     const homeName=g.teams.home.team.name, awayName=g.teams.away.team.name;
     const ev=events.find(e=> e.home_team===homeName && e.away_team===awayName);
     if(!ev) continue;
     try{
       const odd=await jget(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${ev.id}/odds?apiKey=${key}&regions=us&markets=pitcher_strikeouts&oddsFormat=american`);
-      applyOdds(g.gamePk, odd);
+      applied += applyOdds(g.gamePk, odd);
     }catch(e){/* props may need paid plan */}
   }
-  setSlateStatus("Live strikeout props loaded","ok");
+  oddsLive = applied>0;
+  updateOddsKeyDot();
+  if(applied>0) setSlateStatus(`Live strikeout props loaded · ${applied} pitcher${applied>1?"s":""}`,"ok");
+  else setSlateStatus("Key works, but no strikeout props returned — player props need a paid Odds API plan","err");
 }
 function applyOdds(gamePk, odd){
-  const book=odd.bookmakers?.[0]; if(!book) return;
-  const mkt=book.markets?.find(m=>m.key==="pitcher_strikeouts"); if(!mkt) return;
+  let n=0;
+  const book=odd.bookmakers?.[0]; if(!book) return 0;
+  const mkt=book.markets?.find(m=>m.key==="pitcher_strikeouts"); if(!mkt) return 0;
   // outcomes: {name:'Over'/'Under', description:pitcherName, point, price}
   document.querySelectorAll(`.matchup[data-game="${gamePk}"] .pcard[data-pid]`).forEach(card=>{
     const name=card.dataset.pname.toLowerCase();
     const outs=mkt.outcomes.filter(o=>(o.description||"").toLowerCase()===name);
     if(!outs.length) return;
+    n++;
     const cont=card.querySelector("[data-odds]");
     cont.innerHTML=`<span class="pteam">K props:</span>`+outs.map(o=>
       `<span class="odds-chip" data-pick data-side="${o.name}" data-line="${o.point}" data-price="${o.price}">${o.name} ${o.point} (${fmtAm(o.price)})</span>`
@@ -1944,6 +1953,7 @@ function applyOdds(gamePk, odd){
       document.querySelector(".grid").scrollIntoView({behavior:"smooth",block:"start"});
     }));
   });
+  return n;
 }
 
 /* ---------- wire live-data controls ---------- */
@@ -1972,12 +1982,16 @@ document.getElementById("saveOddsKey").addEventListener("click", ()=>{
   document.getElementById("oddsSettings").hidden=true;
   updateOddsKeyDot();
 });
+let oddsLive=false;   // did the last slate load actually return real strikeout props?
 function updateOddsKeyDot(){
-  const on=!!getOddsKey();
+  const has=!!getOddsKey();
   const dot=document.getElementById("oddsKeyDot");
   const btn=document.getElementById("oddsSettingsBtn");
-  if(dot) dot.classList.toggle("on", on);
-  if(btn){ btn.classList.toggle("on", on); btn.title = on ? "Odds key saved — live lines enabled" : "No odds key — click to add one"; }
+  let cls="", title="No odds key — click to add one";
+  if(has && oddsLive){ cls="on"; title="Live strikeout props loaded ✓"; }
+  else if(has){ cls="saved"; title="Key saved — load a slate to pull props (player props need a paid Odds API plan)"; }
+  [dot,btn].forEach(el=>{ if(el){ el.classList.remove("on","saved"); if(cls) el.classList.add(cls); } });
+  if(btn) btn.title=title;
 }
 
 function renderAll(){ renderScoreboard(); renderBoard(); renderChart(); renderPitchers(); }
