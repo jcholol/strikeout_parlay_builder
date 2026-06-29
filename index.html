@@ -664,6 +664,7 @@ const SIDES = ["Over","Under","Yes","No"];
 /* ---------- State ---------- */
 const LS_KEY = "bullpen.parlays.v1";
 let parlays = load();
+migrateLegOdds();
 let filter = "all";
 let draftLegs = [ newLeg() ];
 
@@ -691,15 +692,28 @@ function decToAm(d){
   return d >= 2 ? Math.round((d-1)*100) : -Math.round(100/(d-1));
 }
 function fmtAm(a){ if(a===null||a===undefined||isNaN(a)) return "—"; return a>0 ? "+"+a : ""+a; }
+/* odds are stored as decimal multipliers (×). Display helper: */
+function fmtMult(d){ const n=Number(d); return (isFinite(n) && n>1) ? n.toFixed(2)+"×" : "—"; }
 function money(n){
   const s = (n<0?"-":"") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   return s;
 }
-/* combined decimal odds from legs that have odds entered */
+/* combined multiplier from legs that have odds entered (odds = decimal × per leg) */
 function combinedDecimal(legs){
-  const valid = legs.map(l=>amToDec(l.odds)).filter(d=>d!==null);
+  const valid = legs.map(l=>parseFloat(l.odds)).filter(d=>isFinite(d) && d>1);
   if(valid.length===0) return null;
   return valid.reduce((a,b)=>a*b,1);
+}
+/* one-time: convert any legacy American leg odds (e.g. -110 / +150) to × multipliers */
+function migrateLegOdds(){
+  let changed=false;
+  (parlays||[]).forEach(p=>p.legs.forEach(l=>{
+    const n=Number(l.odds);
+    if(l.odds!=="" && l.odds!=null && isFinite(n) && (n<=-100 || n>=100)){
+      l.odds=amToDec(n).toFixed(2); changed=true;   // American → decimal multiplier
+    }
+  }));
+  if(changed) save();
 }
 
 /* ---------- Stats ---------- */
@@ -764,19 +778,29 @@ function renderLegs(){
     <div class="row leg" data-i="${i}">
       <label><span>Pitcher</span><input data-k="pitcher" value="${esc(l.pitcher)}" placeholder="e.g. Tarik Skubal" /></label>
       <label><span>Market</span><select data-k="market">${MARKETS.map(m=>`<option ${m===l.market?'selected':''}>${m}</option>`).join("")}</select></label>
-      <label><span>Line</span><input data-k="line" value="${esc(l.line)}" placeholder="6.5" /></label>
+      <label><span>Line</span><input data-k="line" value="${esc(l.line)}" placeholder="5" inputmode="numeric" /></label>
       <label><span>Side</span><select data-k="side">${SIDES.map(sd=>`<option ${sd===l.side?'selected':''}>${sd}</option>`).join("")}</select></label>
-      <label><span>Odds (Am.)</span><input data-k="odds" value="${esc(l.odds)}" placeholder="-110" inputmode="numeric" /></label>
+      <label><span>Mult (×)</span><input data-k="odds" value="${esc(l.odds)}" placeholder="1.91" inputmode="decimal" /></label>
       <button class="rmleg" data-rm="${i}" title="remove leg">×</button>
     </div>
   `).join("");
 
   wrap.querySelectorAll("input,select").forEach(el=>{
     el.addEventListener("input", e=>{
-      const i = +e.target.closest(".row").dataset.i;
+      const row = e.target.closest(".row");
+      const i = +row.dataset.i;
       const k = e.target.dataset.k;
       draftLegs[i][k] = e.target.value;
       if(k==="pitcher"){ draftLegs[i].personId=null; draftLegs[i].gamePk=null; } // typed manually → drop stored ids
+      // live: changing the line/pitcher on a strikeout leg re-pulls the Kalshi multiplier
+      if((k==="line"||k==="pitcher"||k==="market") && draftLegs[i].market==="Strikeouts" && draftLegs[i].line!==""){
+        const rg=kalshiRungExact(draftLegs[i].pitcher, Math.round(+draftLegs[i].line));
+        if(rg){
+          draftLegs[i].odds = rg.dec.toFixed(2);
+          const oi=row.querySelector('[data-k="odds"]');
+          if(oi && document.activeElement!==oi) oi.value=draftLegs[i].odds;
+        }
+      }
       renderSummary();
     });
   });
@@ -812,7 +836,7 @@ function renderSummary(){
     dec = (wager && payout) ? payout/wager : 0;
   }
 
-  document.getElementById("sumOdds").textContent = (dec && dec>1) ? fmtAm(decToAm(dec)) : "—";
+  document.getElementById("sumOdds").textContent = (dec && dec>1) ? fmtMult(dec) : "—";
   document.getElementById("sumPayout").textContent = money(payout);
   document.getElementById("sumProfit").textContent = money(profit);
   document.getElementById("sumLegs").textContent = draftLegs.length;
@@ -850,7 +874,7 @@ function renderBoard(){
         <div class="num">${String(i+1).padStart(2,"0")}</div>
         <div class="pitcher">${esc(l.pitcher||"—")}</div>
         <div class="prop">${l.market==="Strikeouts" ? `<b>${esc(l.line)}+</b> K` : `<b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}`}</div>
-        <div class="odds">${l.odds!==""?fmtAm(Number(l.odds)):"—"}</div>
+        <div class="odds">${l.odds!==""?fmtMult(l.odds):"—"}</div>
         <div class="legmark">${mark}</div>
       </div>`;}).join("");
 
@@ -873,7 +897,7 @@ function renderBoard(){
       <div class="ticket-foot">
         <div class="nums">
           <div class="n"><div class="k">Wager</div><div class="v">${money(p.wager)}</div></div>
-          <div class="n"><div class="k">Odds</div><div class="v amber">${fmtAm(p.oddsAm)}</div></div>
+          <div class="n"><div class="k">Multiplier</div><div class="v amber">${fmtMult(p.oddsDec)}</div></div>
           <div class="n"><div class="k">Payout</div><div class="v">${money(p.payout)}</div></div>
           <div class="n"><div class="k">${profitLabel}</div><div class="v ${profitClass}">${(profitShown>=0?"+":"")+money(profitShown).replace("-","")}</div></div>
         </div>
@@ -1135,14 +1159,14 @@ function fmtShort(d){
 /* ---------- CSV export ---------- */
 document.getElementById("csvBtn").addEventListener("click", ()=>{
   if(parlays.length===0){ toast("Nothing to export"); return; }
-  const head=["Date","Status","Legs","Pitchers","Selections","Wager","CombinedOdds","Payout","Profit/Loss"];
+  const head=["Date","Status","Legs","Pitchers","Selections","Wager","CombinedMultiplier","Payout","Profit/Loss"];
   const rows=parlays.map(p=>{
     const pl = p.status==="won"?(p.payout-p.wager):p.status==="lost"?-p.wager:"";
-    const sel = p.legs.map(l=>`${l.pitcher} ${l.side} ${l.line} ${l.market} (${fmtAm(Number(l.odds))})`).join(" | ");
+    const sel = p.legs.map(l=>`${l.pitcher} ${l.market==="Strikeouts"?l.line+"+":l.side+" "+l.line} ${l.market} (${fmtMult(l.odds)})`).join(" | ");
     return [
       p.date, p.status, p.legs.length,
       p.legs.map(l=>l.pitcher).join("; "),
-      sel, p.wager, fmtAm(p.oddsAm), p.payout.toFixed(2),
+      sel, p.wager, (p.oddsDec||0).toFixed(2)+"×", p.payout.toFixed(2),
       pl===""?"":pl.toFixed(2)
     ];
   });
@@ -1316,11 +1340,11 @@ function addLegFromSlate({pitcher,personId,gamePk,market,line}){
       const target = leg.line!=="" ? Math.round(+leg.line) : 5;   // whole-number "N+" threshold
       let rung = o.rungs.find(r=>r.target===target);
       if(!rung && leg.line==="") rung = o.rungs.find(r=>r.target>=5) || o.rungs[0];
-      if(rung){ leg.line=String(rung.line); leg.odds=String(rung.am); }
+      if(rung){ leg.line=String(rung.line); leg.odds=rung.dec.toFixed(2); }
     }
   }
   renderLegs(); renderSummary();
-  toast(`${pitcher} · ${market} added${leg.odds!==""?` @ ${fmtAm(+leg.odds)}`:""}`);
+  toast(`${pitcher} · ${market} added${leg.odds!==""?` @ ${fmtMult(leg.odds)}`:""}`);
   // Don't yank the page on every click — let the user stack several legs from the
   // slate first, then scroll down to the builder once they've paused.
   scheduleScrollToBuilder();
@@ -1692,10 +1716,10 @@ function recommendParlay(rows, nLegs){
       if(p<FLOOR) return null;                          // can't even clear 5+ confidently
       for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=FLOOR){target=t;p=pt;} else break; }
       // use the real Kalshi price when that pitcher's market is loaded, else estimate
-      let dec=estLegDecimal(p), am=decToAm(dec), live=false;
+      let dec=estLegDecimal(p), live=false;
       const kr=kalshiRung(r.name, target);
-      if(kr){ target=kr.target; dec=kr.dec; am=kr.am; live=true; p=poissonGE(r.proj, kr.target); }
-      return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line:target, p, dec, am, live };
+      if(kr){ target=kr.target; dec=kr.dec; live=true; p=poissonGE(r.proj, kr.target); }
+      return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line:target, p, dec, live };
     }).filter(Boolean);
     if(cand.length>=2) break;
   }
@@ -1723,7 +1747,7 @@ function buildRecommendedParlay(legs){
     const leg=newLeg();
     leg.pitcher=l.name; leg.personId=l.id; leg.gamePk=l.gamePk;
     leg.market="Strikeouts"; leg.side="Over"; leg.line=String(l.target);
-    leg.odds=String(l.am);   // Kalshi price when live, else model estimate
+    leg.odds=l.dec.toFixed(2);   // Kalshi multiplier when live, else model estimate
     return leg;
   });
   if(!draftLegs.length) draftLegs=[newLeg()];
@@ -1755,9 +1779,9 @@ function renderKResults(rows, leagueK){
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
       ${rec ? `
-      <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ~${rec.dec.toFixed(2)}× (${fmtAm(rec.american)})</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
+      <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ${rec.dec.toFixed(2)}× payout</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
       <div class="krec-sub">${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
-      <div class="krec-legs">${rec.legs.map(l=>`<div class="krec-leg"><span class="krec-name">${esc(l.name)}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtAm(l.am)}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span></div>`).join("")}</div>
+      <div class="krec-legs">${rec.legs.map(l=>`<div class="krec-leg"><span class="krec-name">${esc(l.name)}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span></div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       ` : `<div class="krec-sub">Not enough confident 5+ K legs on this slate to build a parlay.</div>`}
     </div>
@@ -1977,18 +2001,24 @@ function renderKalshiChips(){
     const cont=card.querySelector("[data-odds]"); if(!cont || !o) return;
     matched++; card.dataset.kalshi="1";
     cont.innerHTML=`<span class="pteam">Kalshi K:</span>`+o.rungs.map(r=>
-      `<span class="odds-chip" data-kpick data-line="${r.line}" data-target="${r.target}" data-am="${r.am}" title="${r.target}+ K · mid ${fmtAm(r.am)} (Kalshi bid $${(r.bid||0).toFixed(2)} / ask $${r.ask.toFixed(2)})">${r.target}+ ${fmtAm(r.am)}</span>`
+      `<span class="odds-chip" data-kpick data-line="${r.line}" data-target="${r.target}" data-dec="${r.dec.toFixed(2)}" title="${r.target}+ K · ${fmtMult(r.dec)} (Kalshi mid; bid $${(r.bid||0).toFixed(2)} / ask $${r.ask.toFixed(2)})">${r.target}+ ${fmtMult(r.dec)}</span>`
     ).join("");
     cont.querySelectorAll("[data-kpick]").forEach(ch=>ch.addEventListener("click",()=>{
       let leg=draftLegs.find(l=>!l.pitcher.trim()); if(!leg){leg=newLeg();draftLegs.push(leg);}
       leg.pitcher=card.dataset.pname; leg.personId=+card.dataset.pid; leg.gamePk=+card.dataset.gamepk;
-      leg.market="Strikeouts"; leg.side="Over"; leg.line=ch.dataset.line; leg.odds=ch.dataset.am;
+      leg.market="Strikeouts"; leg.side="Over"; leg.line=ch.dataset.line; leg.odds=ch.dataset.dec;
       renderLegs(); renderSummary();
-      toast(`${card.dataset.pname} ${ch.dataset.target}+ K @ ${fmtAm(+ch.dataset.am)} added`);
+      toast(`${card.dataset.pname} ${ch.dataset.target}+ K @ ${fmtMult(ch.dataset.dec)} added`);
       document.querySelector(".grid").scrollIntoView({behavior:"smooth",block:"start"});
     }));
   });
   return matched;
+}
+// exact Kalshi rung for a pitcher at a whole-number threshold (any liquidity) —
+// used for live odds when the user edits a leg's line
+function kalshiRungExact(name, target){
+  const o=kalshiOdds[normName(name)]; if(!o) return null;
+  return o.rungs.find(r=>r.target===target) || null;
 }
 // nearest LIQUID Kalshi rung for a pitcher at a target threshold (two-sided market,
 // sane spread) — keeps the recommendation off thin penny markets
