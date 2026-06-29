@@ -29,11 +29,12 @@ export default {
 
     // only allow read-only GETs to the Kalshi trade API
     if (request.method !== "GET") return cors(json({ error: "method not allowed" }, 405));
-    if (!url.pathname.startsWith("/trade-api/")) {
+    const path = url.pathname.replace(/\/{2,}/g, "/"); // tolerate accidental double slashes
+    if (!path.startsWith("/trade-api/")) {
       return cors(json({ error: "only /trade-api/* is proxied" }, 400));
     }
 
-    const target = KALSHI_ORIGIN + url.pathname + url.search;
+    const target = KALSHI_ORIGIN + path + url.search;
     try {
       // IMPORTANT:
       //  - no Origin header (that's what Kalshi blocks for browsers)
