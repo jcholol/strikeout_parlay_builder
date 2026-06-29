@@ -100,7 +100,10 @@ async function buildHeaders(env, method, path) {
 }
 async function getPrivateKey(pem) {
   if (_privKey) return _privKey;
-  const der = pemToDer(pem);
+  let der = pemToDer(pem);
+  // Web Crypto only imports PKCS#8 ("BEGIN PRIVATE KEY"). If the key is PKCS#1
+  // ("BEGIN RSA PRIVATE KEY"), wrap it into a PKCS#8 PrivateKeyInfo first.
+  if (/BEGIN RSA PRIVATE KEY/.test(pem)) der = pkcs1ToPkcs8(new Uint8Array(der));
   _privKey = await crypto.subtle.importKey("pkcs8", der, { name: "RSA-PSS", hash: "SHA-256" }, false, ["sign"]);
   return _privKey;
 }
@@ -110,6 +113,24 @@ function pemToDer(pem) {
   const u = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   return u.buffer;
+}
+// minimal DER helpers to wrap a PKCS#1 RSAPrivateKey into PKCS#8 PrivateKeyInfo
+function derLen(n) {
+  if (n < 0x80) return [n];
+  const bytes = [];
+  for (let x = n; x > 0; x >>= 8) bytes.unshift(x & 0xff);
+  return [0x80 | bytes.length, ...bytes];
+}
+function derTLV(tag, content) {
+  const c = Array.from(content);
+  return [tag, ...derLen(c.length), ...c];
+}
+function pkcs1ToPkcs8(pkcs1) {
+  const version = [0x02, 0x01, 0x00];                                  // INTEGER 0
+  const algId = [0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86,       // SEQ { OID rsaEncryption, NULL }
+                 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00];
+  const pk = derTLV(0x04, pkcs1);                                      // OCTET STRING { pkcs1 }
+  return new Uint8Array(derTLV(0x30, [...version, ...algId, ...pk])).buffer;
 }
 function bufToB64(buf) {
   const u = new Uint8Array(buf);
