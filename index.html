@@ -251,6 +251,10 @@
   .btn.lose:hover{background:rgba(255,87,99,.12)}
   .btn.icon{padding:7px 10px}
   .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  .key-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;
+    background:var(--ink-faint);box-shadow:none;transition:.15s}
+  .key-dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  #oddsSettingsBtn.on{border-color:var(--green-dim);color:var(--green)}
 
   .legs-head{
     display:flex;align-items:center;justify-content:space-between;margin:6px 0 10px;
@@ -525,7 +529,7 @@
         <button class="btn" id="analyzeK" title="Project strikeouts & rank the best K play">🔎 Best K Play</button>
         <button class="btn ghost" id="refreshSlate" title="Refresh scores">↻</button>
         <label class="auto"><input type="checkbox" id="autoRefresh" /> Auto</label>
-        <button class="btn ghost" id="oddsSettingsBtn" title="Live odds settings">⚙ Odds Key</button>
+        <button class="btn ghost" id="oddsSettingsBtn" title="Live odds settings"><span class="key-dot" id="oddsKeyDot"></span>⚙ Odds Key</button>
         <span class="slate-status" id="slateStatus"></span>
       </div>
       <div id="kResults"></div>
@@ -1966,7 +1970,15 @@ document.getElementById("saveOddsKey").addEventListener("click", ()=>{
   localStorage.setItem("bullpen.oddskey", v);
   toast(v?"Odds key saved":"Odds key cleared");
   document.getElementById("oddsSettings").hidden=true;
+  updateOddsKeyDot();
 });
+function updateOddsKeyDot(){
+  const on=!!getOddsKey();
+  const dot=document.getElementById("oddsKeyDot");
+  const btn=document.getElementById("oddsSettingsBtn");
+  if(dot) dot.classList.toggle("on", on);
+  if(btn){ btn.classList.toggle("on", on); btn.title = on ? "Odds key saved — live lines enabled" : "No odds key — click to add one"; }
+}
 
 function renderAll(){ renderScoreboard(); renderBoard(); renderChart(); renderPitchers(); }
 
@@ -2100,6 +2112,7 @@ document.querySelectorAll('input[type="date"]').forEach(el=>{
 });
 document.getElementById("betDate").value = new Date().toISOString().slice(0,10);
 document.getElementById("slateDate").value = new Date().toISOString().slice(0,10);
+updateOddsKeyDot();
 renderLegs(); renderSummary(); renderAll();
 if(syncReady()){ setSync("on",""); syncNow(true); } else setSync("off","");
 </script>
