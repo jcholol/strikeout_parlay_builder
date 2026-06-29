@@ -536,7 +536,12 @@
       </div>
       <div id="kResults"></div>
       <div id="oddsSettings" class="odds-settings" hidden>
-        <span>Paste your <a href="https://the-odds-api.com" target="_blank" rel="noopener">The Odds API</a> key to pull live pitcher prop lines (player props need a paid plan). Stored only in this browser.</span>
+        <span><b>Live odds source: Kalshi</b> (free, no key, same place you bet). Kalshi blocks direct browser calls, so paste your <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare Worker</a> proxy URL — it pulls real strikeout-ladder prices onto the slate.</span>
+        <div class="row c2" style="margin-top:8px">
+          <input id="kalshiProxy" placeholder="https://kalshi-proxy.you.workers.dev" />
+          <button class="btn sm amber" id="saveKalshiProxy">Save Proxy</button>
+        </div>
+        <span style="display:block;margin-top:12px;opacity:.85">Optional fallback: paste a <a href="https://the-odds-api.com" target="_blank" rel="noopener">The Odds API</a> key for sportsbook lines on pitchers Kalshi doesn't cover (player props need a paid plan).</span>
         <div class="row c2" style="margin-top:8px">
           <input type="password" id="oddsKey" placeholder="the-odds-api key…" />
           <button class="btn sm amber" id="saveOddsKey">Save Key</button>
@@ -1222,8 +1227,11 @@ async function loadSlate(){
     setSlateStatus(`${games.length} games · ${ids.size} starters${live?` · ${live} live`:""}`,"ok");
     document.getElementById("kResults").innerHTML="";
 
-    // if an odds key is saved, try to enrich with live lines (best-effort)
-    if(getOddsKey()) loadOdds(date, games).catch(()=>{});
+    // live odds: Kalshi first (free, matches where you bet), then optionally The Odds API
+    (async ()=>{
+      await loadKalshiOdds(games).catch(()=>{});
+      if(getOddsKey()) await loadOdds(date, games).catch(()=>{});
+    })();
   }catch(e){
     setSlateStatus("Couldn't reach MLB data ("+e.message+")","err");
   }
@@ -1680,7 +1688,11 @@ function recommendParlay(rows, nLegs){
       let target=5, p=poissonGE(r.proj,5);
       if(p<FLOOR) return null;                          // can't even clear 5+ confidently
       for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=FLOOR){target=t;p=pt;} else break; }
-      return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line:target-0.5, p, dec:estLegDecimal(p) };
+      // use the real Kalshi price when that pitcher's market is loaded, else estimate
+      let line=target-0.5, dec=estLegDecimal(p), am=decToAm(dec), live=false;
+      const kr=kalshiRung(r.name, target);
+      if(kr){ target=kr.target; line=kr.line; dec=kr.dec; am=kr.am; live=true; p=poissonGE(r.proj, kr.target); }
+      return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line, p, dec, am, live };
     }).filter(Boolean);
     if(cand.length>=2) break;
   }
@@ -1708,12 +1720,13 @@ function buildRecommendedParlay(legs){
     const leg=newLeg();
     leg.pitcher=l.name; leg.personId=l.id; leg.gamePk=l.gamePk;
     leg.market="Strikeouts"; leg.side="Over"; leg.line=l.line.toFixed(1);
-    leg.odds=String(decToAm(l.dec));   // estimated price — overwrite with your book's number
+    leg.odds=String(l.am);   // Kalshi price when live, else model estimate
     return leg;
   });
   if(!draftLegs.length) draftLegs=[newLeg()];
   renderLegs(); renderSummary();
-  toast(`Suggested ${legs.length}-leg parlay loaded — odds are estimates, swap in your book's`);
+  const liveN=legs.filter(l=>l.live).length;
+  toast(`Suggested ${legs.length}-leg parlay loaded${liveN?` — ${liveN} leg${liveN!==1?"s":""} priced live from Kalshi`:" — odds are estimates"}`);
   scheduleScrollToBuilder();
 }
 
@@ -1740,8 +1753,8 @@ function renderKResults(rows, leagueK){
       </div>
       ${rec ? `
       <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ~${rec.dec.toFixed(2)}× (${fmtAm(rec.american)})</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
-      <div class="krec-sub">High-K (5+) targets from the most confident arms. Odds are model estimates — swap in your book's.</div>
-      <div class="krec-legs">${rec.legs.map(l=>`<div class="krec-leg"><span class="krec-name">${esc(l.name)}</span> <span class="krec-bet">Over ${l.line.toFixed(1)} K · ${l.target}+</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtAm(decToAm(l.dec))}</span></div>`).join("")}</div>
+      <div class="krec-sub">${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
+      <div class="krec-legs">${rec.legs.map(l=>`<div class="krec-leg"><span class="krec-name">${esc(l.name)}</span> <span class="krec-bet">Over ${l.line.toFixed(1)} K · ${l.target}+</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtAm(l.am)}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span></div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       ` : `<div class="krec-sub">Not enough confident 5+ K legs on this slate to build a parlay.</div>`}
     </div>
@@ -1937,6 +1950,7 @@ function applyOdds(gamePk, odd){
   const mkt=book.markets?.find(m=>m.key==="pitcher_strikeouts"); if(!mkt) return 0;
   // outcomes: {name:'Over'/'Under', description:pitcherName, point, price}
   document.querySelectorAll(`.matchup[data-game="${gamePk}"] .pcard[data-pid]`).forEach(card=>{
+    if(card.dataset.kalshi) return;   // Kalshi already filled this card — don't overwrite
     const name=card.dataset.pname.toLowerCase();
     const outs=mkt.outcomes.filter(o=>(o.description||"").toLowerCase()===name);
     if(!outs.length) return;
@@ -1956,6 +1970,83 @@ function applyOdds(gamePk, odd){
   return n;
 }
 
+/* ============================================================
+   KALSHI live strikeout odds (read through your CORS proxy Worker)
+   Kalshi blocks direct browser calls, so requests go: site → Worker → Kalshi.
+   ============================================================ */
+const KALSHI_SERIES = "KXMLBKS";
+const KALSHI_PROXY_DEFAULT = "";   // hardcode your Worker URL here to enable for all visitors
+function kalshiBase(){ return ((localStorage.getItem("bullpen.kalshiproxy")||KALSHI_PROXY_DEFAULT)||"").replace(/\/+$/,""); }
+let kalshiOdds = {};   // normName -> { rungs:[{target,line,ask,bid,am,dec}], event, pname }
+
+function normName(s){
+  return (s||"").normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .toLowerCase().replace(/[^a-z\s]/g," ").replace(/\b(jr|sr|ii|iii|iv)\b/g," ")
+    .replace(/\s+/g," ").trim();
+}
+function askToAmerican(ask){ return (ask>0 && ask<1) ? decToAm(1/ask) : null; }
+
+async function loadKalshiOdds(games){
+  const base=kalshiBase(); if(!base) return;
+  setSlateStatus("Fetching live Kalshi strikeout markets…");
+  let data;
+  try{
+    data = await jget(`${base}/trade-api/v2/events?series_ticker=${KALSHI_SERIES}&status=open&limit=120&with_nested_markets=true`);
+  }catch(e){ setSlateStatus("Kalshi proxy unreachable — check the proxy URL in ⚙ Odds Key","err"); return; }
+  kalshiOdds={};
+  (data.events||[]).forEach(ev=>{
+    (ev.markets||[]).forEach(m=>{
+      const parts=(m.yes_sub_title||"").split(":");        // "Carlos Rodón: 6+"
+      if(parts.length<2) return;
+      const pname=parts[0].trim(), target=parseInt(parts[1]);
+      if(!target) return;
+      const ask=+m.yes_ask_dollars, bid=+m.yes_bid_dollars;   // API returns these as strings
+      if(!(ask>=0.03 && ask<=0.97)) return;                // skip penny longshots & near-locks (no real market)
+      const am=askToAmerican(ask);
+      if(am===null) return;
+      const line=(m.floor_strike!=null)?+m.floor_strike:(target-0.5);
+      const key=normName(pname);
+      const slot=kalshiOdds[key] || (kalshiOdds[key]={rungs:[], event:ev.event_ticker, pname});
+      slot.rungs.push({target, line, ask, bid, am, dec:1/ask});
+    });
+  });
+  Object.values(kalshiOdds).forEach(o=>o.rungs.sort((a,b)=>a.target-b.target));
+  const matched=renderKalshiChips();
+  oddsLive = matched>0; updateOddsKeyDot();
+  const pcount=Object.keys(kalshiOdds).length;
+  setSlateStatus(pcount?`⚡ Kalshi K odds · matched ${matched} pitcher${matched!==1?"s":""} on your slate`:"Kalshi: no open strikeout markets right now","ok");
+}
+
+function renderKalshiChips(){
+  let matched=0;
+  document.querySelectorAll("#slate .pcard[data-pid]").forEach(card=>{
+    const o=kalshiOdds[normName(card.dataset.pname)];
+    const cont=card.querySelector("[data-odds]"); if(!cont || !o) return;
+    matched++; card.dataset.kalshi="1";
+    cont.innerHTML=`<span class="pteam">Kalshi K:</span>`+o.rungs.map(r=>
+      `<span class="odds-chip" data-kpick data-line="${r.line}" data-target="${r.target}" data-am="${r.am}" title="buy ${r.target}+ at $${r.ask.toFixed(2)} → ${fmtAm(r.am)} (bid $${(r.bid||0).toFixed(2)})">${r.target}+ ${fmtAm(r.am)}</span>`
+    ).join("");
+    cont.querySelectorAll("[data-kpick]").forEach(ch=>ch.addEventListener("click",()=>{
+      let leg=draftLegs.find(l=>!l.pitcher.trim()); if(!leg){leg=newLeg();draftLegs.push(leg);}
+      leg.pitcher=card.dataset.pname; leg.personId=+card.dataset.pid; leg.gamePk=+card.dataset.gamepk;
+      leg.market="Strikeouts"; leg.side="Over"; leg.line=ch.dataset.line; leg.odds=ch.dataset.am;
+      renderLegs(); renderSummary();
+      toast(`${card.dataset.pname} ${ch.dataset.target}+ K @ ${fmtAm(+ch.dataset.am)} added`);
+      document.querySelector(".grid").scrollIntoView({behavior:"smooth",block:"start"});
+    }));
+  });
+  return matched;
+}
+// nearest LIQUID Kalshi rung for a pitcher at a target threshold (two-sided market,
+// sane spread) — keeps the recommendation off thin penny markets
+function kalshiRung(name, target){
+  const o=kalshiOdds[normName(name)]; if(!o) return null;
+  const liquid=o.rungs.filter(r=>r.bid>0 && r.ask<=0.92 && (r.ask-r.bid)<=0.25);
+  if(!liquid.length) return null;
+  return liquid.find(r=>r.target===target)
+      || liquid.slice().sort((a,b)=>Math.abs(a.target-target)-Math.abs(b.target-target))[0];
+}
+
 /* ---------- wire live-data controls ---------- */
 document.getElementById("loadSlate").addEventListener("click", loadSlate);
 document.getElementById("analyzeK").addEventListener("click", analyzeK);
@@ -1969,11 +2060,19 @@ document.getElementById("oddsSettingsBtn").addEventListener("click", ()=>{
   const el=document.getElementById("oddsSettings");
   el.hidden=!el.hidden;
   if(!el.hidden){
-    const inp=document.getElementById("oddsKey");
-    inp.value=getOddsKey();
+    const inp=document.getElementById("kalshiProxy");
+    inp.value=localStorage.getItem("bullpen.kalshiproxy")||"";
+    document.getElementById("oddsKey").value=getOddsKey();
     el.scrollIntoView({behavior:"smooth",block:"center"});
     setTimeout(()=>inp.focus(),250);
   }
+});
+document.getElementById("saveKalshiProxy").addEventListener("click", ()=>{
+  const v=document.getElementById("kalshiProxy").value.trim().replace(/\/+$/,"");
+  localStorage.setItem("bullpen.kalshiproxy", v);
+  toast(v?"Kalshi proxy saved":"Kalshi proxy cleared");
+  document.getElementById("oddsSettings").hidden=true;
+  if(v && slateState && slateState.games) loadKalshiOdds(slateState.games).catch(()=>{});
 });
 document.getElementById("saveOddsKey").addEventListener("click", ()=>{
   const v=document.getElementById("oddsKey").value.trim();
@@ -1984,12 +2083,12 @@ document.getElementById("saveOddsKey").addEventListener("click", ()=>{
 });
 let oddsLive=false;   // did the last slate load actually return real strikeout props?
 function updateOddsKeyDot(){
-  const has=!!getOddsKey();
+  const configured = !!kalshiBase() || !!getOddsKey();
   const dot=document.getElementById("oddsKeyDot");
   const btn=document.getElementById("oddsSettingsBtn");
-  let cls="", title="No odds key — click to add one";
-  if(has && oddsLive){ cls="on"; title="Live strikeout props loaded ✓"; }
-  else if(has){ cls="saved"; title="Key saved — load a slate to pull props (player props need a paid Odds API plan)"; }
+  let cls="", title="No live odds source — click to add a Kalshi proxy";
+  if(configured && oddsLive){ cls="on"; title="Live strikeout odds loaded ✓"; }
+  else if(configured){ cls="saved"; title="Odds source set — load a slate to pull live prices"; }
   [dot,btn].forEach(el=>{ if(el){ el.classList.remove("on","saved"); if(cls) el.classList.add(cls); } });
   if(btn) btn.title=title;
 }
