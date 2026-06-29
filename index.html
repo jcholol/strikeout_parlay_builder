@@ -1234,6 +1234,8 @@ let slateState = null;       // {games, statById, date} of last loaded slate
 let autoTimer = null;
 let recLegCount = 3;         // chosen parlay size for the suggestion (2–5)
 let lastK = null;            // {rows, leagueK} of the last Best-K analysis, for re-renders
+let kShown = false;          // are Best-K results currently displayed?
+let _lastKrefresh = 0;       // throttle background re-analysis (lineup updates)
 
 async function jget(url){
   const r = await fetch(url);
@@ -1280,7 +1282,7 @@ async function loadSlate(){
     wireSlate();
     const live = games.filter(g=>g.status.abstractGameState==="Live").length;
     setSlateStatus(`${games.length} games · ${ids.size} starters${live?` · ${live} live`:""}`,"ok");
-    document.getElementById("kResults").innerHTML="";
+    document.getElementById("kResults").innerHTML=""; kShown=false;
 
     // live odds: Kalshi first (free, matches where you bet), then optionally The Odds API
     loadKalshiOdds(games).catch(()=>{});
@@ -1641,11 +1643,14 @@ function projectK(pStat, oppHit, leagueK){
   return { proj, rate, pK, oppK, bfPerStart, bullpen, thin, gs, starterShare };
 }
 
-async function analyzeK(){
-  if(!slateState || !slateState.games.length){ toast("Load a slate first"); return; }
-  const btn=document.getElementById("analyzeK"); btn.disabled=true; const old=btn.textContent; btn.textContent="🔎 Crunching…";
+async function analyzeK(opts={}){
+  const quiet=!!opts.quiet;   // background refresh (e.g. lineups posted) — don't flash the UI
+  if(!slateState || !slateState.games.length){ if(!quiet) toast("Load a slate first"); return; }
+  _lastKrefresh=Date.now();
+  const btn=document.getElementById("analyzeK"); let old;
+  if(!quiet){ btn.disabled=true; old=btn.textContent; btn.textContent="🔎 Crunching…"; }
   const out=document.getElementById("kResults");
-  out.innerHTML=`<div class="kpanel"><h3>Analyzing strikeout matchups…</h3></div>`;
+  if(!quiet) out.innerHTML=`<div class="kpanel"><h3>Analyzing strikeout matchups…</h3></div>`;
   Object.keys(gameCtxCache).forEach(k=>delete gameCtxCache[k]);   // re-pull weather/ump + posted lineups fresh
   try{
     const {games, statById, season}=slateState;
@@ -1709,11 +1714,11 @@ async function analyzeK(){
         });
       }
     }
-    if(!rows.length){ out.innerHTML=`<div class="kpanel"><h3>Not enough data</h3></div>`; return; }
+    if(!rows.length){ if(!quiet) out.innerHTML=`<div class="kpanel"><h3>Not enough data</h3></div>`; return; }
     rows.sort((a,b)=> (a.bullpen-b.bullpen) || (b.proj-a.proj)); // real starters first, bullpen games last
     renderKResults(rows, leagueK);
     annotateK(rows);
-  } finally { btn.disabled=false; btn.textContent=old; }
+  } finally { if(!quiet){ btn.disabled=false; btn.textContent=old; } }
 }
 
 /* baseball innings ("123.1" = 123⅓) → decimal innings */
@@ -1818,7 +1823,7 @@ function buildRecommendedParlay(legs){
 }
 
 function renderKResults(rows, leagueK){
-  lastK={rows, leagueK};
+  lastK={rows, leagueK}; kShown=true;
   const top=rows[0];
   const rec=recommendParlay(rows, recLegCount);
   const mlbTotal=rows.find(r=>r.lgRank)?.lgRank.mlbTotal||null;
@@ -2022,12 +2027,20 @@ function autoSettle(force){
   _lastAutoGrade=Date.now();
   gradeAll({silent:true}).catch(()=>{});
 }
+// re-pull Best-K (for newly posted lineups) when you return, throttled, only if shown
+function maybeRefreshK(){
+  if(!kShown) return;
+  if(Date.now()-_lastKrefresh < 180000) return;          // 3-min throttle
+  if(!slateState || !slateState.games?.length) return;
+  analyzeK({quiet:true}).catch(()=>{});
+}
 function startAutoGrade(){
   clearInterval(autoGradeTimer);
   setTimeout(()=>autoSettle(true), 4000);                            // shortly after load / refresh
-  autoGradeTimer=setInterval(()=>autoSettle(true), 150000);          // periodic while open
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) autoSettle(false); }); // return to tab
-  window.addEventListener("focus", ()=>autoSettle(false));
+  autoGradeTimer=setInterval(()=>{ autoSettle(true); maybeRefreshK(); }, 150000);   // periodic while open
+  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); };
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) onReturn(); }); // return to tab
+  window.addEventListener("focus", onReturn);
 }
 
 /* ============================================================
@@ -2116,7 +2129,7 @@ function kalshiRung(name, target){
 
 /* ---------- wire live-data controls ---------- */
 document.getElementById("loadSlate").addEventListener("click", loadSlate);
-document.getElementById("analyzeK").addEventListener("click", analyzeK);
+document.getElementById("analyzeK").addEventListener("click", ()=>analyzeK());
 document.getElementById("refreshSlate").addEventListener("click", loadSlate);
 document.getElementById("autoRefresh").addEventListener("change", e=>{
   clearInterval(autoTimer);
