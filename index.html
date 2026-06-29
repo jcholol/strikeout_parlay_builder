@@ -330,6 +330,17 @@
   .leg-line .actualk{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);margin-left:7px;white-space:nowrap}
   .leg-line.hit .actualk{color:var(--green)}
   .leg-line.miss .actualk{color:var(--red)}
+  /* in-game live strikeout tracker */
+  .leg-line .livek{font-family:"JetBrains Mono";font-size:11px;font-weight:700;color:var(--amber);margin-left:7px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;vertical-align:middle}
+  .leg-line .livek .live-dot{width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 7px var(--red);animation:pulse 1.5s infinite;display:inline-block}
+  .leg-line .livek.cleared{color:var(--green)}
+  .leg-line .livek.cleared .live-dot{background:var(--green);box-shadow:0 0 7px var(--green)}
+  .leg-line .pips{display:inline-flex;align-items:center;gap:3px;margin-left:7px;vertical-align:middle}
+  .leg-line .pip{width:8px;height:8px;border-radius:50%;border:1px solid var(--ink-faint);background:transparent;flex:none}
+  .leg-line .pip.on{background:var(--amber);border-color:var(--amber);box-shadow:0 0 5px rgba(245,179,66,.6)}
+  .leg-line .pip.on.done{background:var(--green);border-color:var(--green);box-shadow:0 0 5px rgba(80,200,120,.6)}
+  .leg-line .pip-extra{font-family:"JetBrains Mono";font-size:10px;font-weight:700;color:var(--green);margin-left:2px}
+  .leg-line.live{background:rgba(245,179,66,.05)}
   .ticket-foot{
     display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 18px;
     background:rgba(0,0,0,.18);flex-wrap:wrap;
@@ -876,11 +887,22 @@ function renderBoard(){
     const legs = p.legs.map((l,i)=>{
       const res = l.result || "";
       const mark = res==="hit" ? "✓" : res==="miss" ? "✗" : "○";
+      // in-game live tracker: tick Ks up 1-by-1 while the pitcher's game is live & the ticket pending
+      const lg = (p.status==="pending" && l.gamePk) ? liveGames[l.gamePk] : null;
+      const isLiveK = lg && lg.state==="Live" && l.market==="Strikeouts" && l.liveK!=null;
+      const half = lg && lg.inningState ? (/^bot/i.test(lg.inningState)?"B":/^top/i.test(lg.inningState)?"T":/^mid/i.test(lg.inningState)?"M":"E") : "";
+      let progress;
+      if(isLiveK){
+        const cleared = l.liveK >= (+l.line);
+        progress = `<span class="livek${cleared?" cleared":""}"><span class="live-dot"></span>${l.liveK} K${lg.inning?` · ${half}${lg.inning}`:""}</span>${kPips(l.liveK, l.line)}`;
+      } else {
+        progress = l.actual!=null ? `<span class="actualk">→ ${esc(String(l.actual))}${l.market==="Strikeouts"?" K":""}</span>` : "";
+      }
       return `
-      <div class="leg-line ${res}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
+      <div class="leg-line ${res}${isLiveK?" live":""}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
         <div class="num">${String(i+1).padStart(2,"0")}</div>
         <div class="pitcher">${esc(l.pitcher||"—")}</div>
-        <div class="prop">${l.market==="Strikeouts" ? `<b>${esc(l.line)}+</b> K` : `<b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}`}${l.actual!=null?`<span class="actualk">→ ${esc(String(l.actual))}${l.market==="Strikeouts"?" K":""}</span>`:""}</div>
+        <div class="prop">${l.market==="Strikeouts" ? `<b>${esc(l.line)}+</b> K` : `<b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}`}${progress}</div>
         <div class="odds">${l.odds!==""?fmtMult(l.odds):"—"}</div>
         <div class="legmark">${mark}</div>
       </div>`;}).join("");
@@ -2041,10 +2063,10 @@ function annotateK(rows){
    ============================================================ */
 async function getStatusMap(date, fresh){
   if(!fresh && statusCache[date]) return statusCache[date];   // fresh=true to detect games flipping to Final
-  const d = await jget(`${MLB}/schedule?sportId=1&date=${date}&hydrate=probablePitcher`);
+  const d = await jget(`${MLB}/schedule?sportId=1&date=${date}&hydrate=probablePitcher,linescore`);
   const map={};
   (d.dates[0]?.games||[]).forEach(g=>{
-    map[g.gamePk]={ state:g.status.abstractGameState, codedState:g.status.detailedState };
+    map[g.gamePk]={ state:g.status.abstractGameState, codedState:g.status.detailedState, inning:g.linescore?.currentInning, inningState:g.linescore?.inningState };
     ["away","home"].forEach(s=>{
       const pp=g.teams[s].probablePitcher;
       if(pp) map["name:"+pp.fullName.toLowerCase()]=g.gamePk;
@@ -2160,10 +2182,71 @@ function startAutoGrade(){
   clearInterval(autoGradeTimer);
   setTimeout(()=>autoSettle(true), 4000);                            // shortly after load / refresh
   autoGradeTimer=setInterval(()=>{ autoSettle(true); maybeRefreshK(); }, 150000);   // periodic while open
-  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); };
+  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); liveTick(); };
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) onReturn(); }); // return to tab
   window.addEventListener("focus", onReturn);
 }
+
+/* ============================================================
+   LIVE IN-GAME K TRACKER — poll the boxscore of live games and tick each
+   pending strikeout leg's count up 1-by-1 as the pitcher records Ks.
+   ============================================================ */
+const liveGames={};            // gamePk -> {state, inning, inningState}
+let liveTimer=null, _liveBusy=false;
+// a row of pips toward the line: filled for each K so far, hollow for the rest; +N once cleared
+function kPips(cur, line){
+  const L=Math.max(1, Math.round(+line||0));
+  const c=Math.max(0, +cur||0), done=c>=L;
+  let s="";
+  for(let i=1;i<=L;i++) s+=`<span class="pip${i<=c?" on"+(done?" done":""):""}"></span>`;
+  return `<span class="pips">${s}${c>L?`<span class="pip-extra">+${c-L}</span>`:""}</span>`;
+}
+async function refreshLive(){
+  if(_liveBusy) return false;
+  _liveBusy=true;
+  let anyLive=false, anyFinalPending=false;
+  try{
+    const pend=parlays.filter(p=>p.status==="pending");
+    if(!pend.length) return false;
+    const byDate={};
+    pend.forEach(p=>p.legs.forEach(l=>{ if(l.market==="Strikeouts"){ (byDate[p.date]=byDate[p.date]||[]).push(l); } }));
+    for(const date of Object.keys(byDate)){
+      const smap=await getStatusMap(date, true);            // fresh schedule + linescore
+      const legs=byDate[date];
+      legs.forEach(l=>{ if(!l.gamePk){ const gp=smap["name:"+(l.pitcher||"").toLowerCase()]; if(gp) l.gamePk=gp; } });
+      const liveSet=new Set();
+      legs.forEach(l=>{ const s=smap[l.gamePk]; if(!s) return; if(s.state==="Live") liveSet.add(l.gamePk); else if(s.state==="Final") anyFinalPending=true; });
+      for(const gp of liveSet){
+        anyLive=true;
+        try{
+          const box=await getBox(gp, true);                 // fresh boxscore = current K totals
+          const s=smap[gp];
+          liveGames[gp]={ state:"Live", inning:s.inning, inningState:s.inningState };
+          legs.filter(l=>l.gamePk===gp).forEach(l=>{
+            const pl=findPitcher(box, l.personId, l.pitcher);
+            const k=pl?.stats?.pitching?.strikeOuts;
+            l.liveK = (k==null? null : +k);
+          });
+        }catch(e){}
+      }
+      // a leg whose game is no longer live drops its transient live count (final grade takes over)
+      legs.forEach(l=>{ const s=smap[l.gamePk]; if(!s || s.state!=="Live"){ delete l.liveK; delete liveGames[l.gamePk]; } });
+    }
+    if(anyFinalPending) gradeAll({silent:true}).catch(()=>{});   // settle any game that just went Final
+    renderBoard();
+  }catch(e){}
+  finally{ _liveBusy=false; }
+  return anyLive;
+}
+// adaptive cadence: poll fast (30s) while a tracked game is live, slow otherwise
+async function liveTick(){
+  const anyLive=await refreshLive().catch(()=>false);
+  clearTimeout(liveTimer);
+  const pendingExists=parlays.some(p=>p.status==="pending");
+  const next = anyLive ? 30000 : (pendingExists ? 120000 : 600000);
+  liveTimer=setTimeout(liveTick, next);
+}
+function startLiveTracking(){ clearTimeout(liveTimer); setTimeout(liveTick, 1500); }
 
 /* ============================================================
    KALSHI live strikeout odds (read through your CORS proxy Worker)
@@ -2422,6 +2505,7 @@ document.getElementById("slateDate").value = new Date().toISOString().slice(0,10
 updateOddsKeyDot();
 renderLegs(); renderSummary(); renderAll();
 startAutoGrade();
+startLiveTracking();
 if(syncReady()){ setSync("on",""); syncNow(true); } else setSync("off","");
 </script>
 </body>
