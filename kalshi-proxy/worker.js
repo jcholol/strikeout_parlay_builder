@@ -1,26 +1,31 @@
 /**
- * Kalshi CORS proxy — Cloudflare Worker (with resilient caching)
- * --------------------------------------------------------------
- * Kalshi's API (https://api.elections.kalshi.com) blocks browser requests
- * (403 when an Origin header is present) AND rate-limits Cloudflare's shared
- * egress IPs (429 "too many requests"). This Worker:
- *   1. fetches Kalshi server-side with no Origin header,
- *   2. caches each successful response in Cloudflare's cache,
- *   3. serves the cached copy without re-hitting Kalshi while it's still fresh,
- *   4. and serves the last good copy (stale) if Kalshi is throttling — so one
- *      success keeps the app working through 429 storms.
+ * Kalshi CORS proxy — Cloudflare Worker (authenticated)
+ * -----------------------------------------------------
+ * Kalshi blocks browser calls (403 with an Origin header) and rate-limits
+ * unauthenticated traffic from Cloudflare's shared IPs (429). The fix is to
+ * authenticate: signed API-key requests get proper per-account rate limits.
  *
- * Only read-only GETs under /trade-api/ are forwarded. No keys, no writes.
+ * The API key is a Key ID + an RSA private key, and every request must be
+ * RSA-PSS signed. The private key must stay server-side (NEVER in the browser),
+ * so it lives here as a Cloudflare Worker secret.
  *
- * Deploy: dash.cloudflare.com → Workers & Pages → your Worker → Edit code →
- * paste this whole file → Deploy.
+ * ── Set these in the Worker (Settings → Variables and Secrets) ──
+ *   KALSHI_KEY_ID        (variable)  your API key id, e.g. a UUID
+ *   KALSHI_PRIVATE_KEY   (secret)    the full PEM private key, BEGIN/END lines included
  *
- * Test:  https://YOUR-WORKER-URL/trade-api/v2/events?series_ticker=KXMLBKS&status=open&limit=2
+ * If those aren't set, it falls back to unauthenticated (works, but gets 429s).
+ *
+ * Only read-only GETs under /trade-api/ are forwarded. No writes/orders.
+ *
+ * Signing (per Kalshi docs): sign  `${timestampMs}${METHOD}${path}`  where path
+ * excludes the query string; RSA-PSS, SHA-256, MGF1-SHA256, salt length 32;
+ * base64 the signature. Headers: KALSHI-ACCESS-KEY / -TIMESTAMP / -SIGNATURE.
  */
 
 const KALSHI_ORIGIN = "https://api.elections.kalshi.com";
-const FRESH_MS = 60 * 1000;     // serve cache without touching Kalshi for 60s
-const UA = "Mozilla/5.0 (compatible; bullpen/1.0)";
+const FRESH_MS = 30 * 1000;   // serve cache without touching Kalshi for 30s
+
+let _privKey = null;          // cached imported CryptoKey across requests
 
 export default {
   async fetch(request, env, ctx) {
@@ -40,43 +45,82 @@ export default {
     const cache = caches.default;
     const cacheKey = new Request("https://kalshi-cache" + path + search, { method: "GET" });
 
-    // 1) fresh cache hit → serve immediately, never touch Kalshi
+    // 1) fresh cache → serve immediately
     const cached = await cache.match(cacheKey);
-    if (cached) {
-      const age = Date.now() - Number(cached.headers.get("x-cached-at") || 0);
-      if (age < FRESH_MS) return withCors(cached, "fresh");
+    if (cached && Date.now() - Number(cached.headers.get("x-cached-at") || 0) < FRESH_MS) {
+      return withCors(cached, "fresh");
     }
 
-    // 2) try Kalshi (one quick retry on 429)
-    let upstream = await tryKalshi(target);
-    if (upstream && upstream.status === 429) { await sleep(400); upstream = await tryKalshi(target); }
+    // 2) build (optionally signed) request headers
+    let headers;
+    try {
+      headers = await buildHeaders(env, "GET", path);   // signs the path WITHOUT query
+    } catch (e) {
+      return cors(json({ error: "bad KALSHI_PRIVATE_KEY (must be a PKCS#8 PEM)", detail: String(e) }, 500));
+    }
+
+    let upstream = await tryFetch(target, headers);
+    if (upstream && upstream.status === 429) { await sleep(400); upstream = await tryFetch(target, headers); }
 
     if (upstream && upstream.ok) {
       const body = await upstream.text();
-      const headers = new Headers({
-        "content-type": "application/json",
-        "cache-control": "public, max-age=60",
-        "x-cached-at": String(Date.now()),
-        "x-proxy-cache": "miss",
+      const store = new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=30", "x-cached-at": String(Date.now()) },
       });
-      const store = new Response(body, { status: 200, headers });
       ctx.waitUntil(cache.put(cacheKey, store.clone()));
       return cors(store);
     }
 
-    // 3) Kalshi failed (429 / 5xx / network) → serve last good copy if we have one
+    // 3) failed → serve last good copy if we have one
     if (cached) return withCors(cached, "stale");
 
-    // 4) nothing to fall back on
     const status = upstream ? upstream.status : 502;
-    return cors(json({ error: "kalshi unavailable", status, note: "rate-limited and no cached copy yet — retry shortly" }, status));
+    const detail = upstream ? await upstream.text().catch(() => "") : "network error";
+    return cors(json({ error: "kalshi unavailable", status, detail: detail.slice(0, 300) }, status));
   },
 };
 
-async function tryKalshi(target) {
-  try {
-    return await fetch(target, { method: "GET", headers: { accept: "application/json", "user-agent": UA } });
-  } catch (e) { return null; }
+/* ---- auth ---- */
+async function buildHeaders(env, method, path) {
+  const h = { accept: "application/json" };
+  if (env && env.KALSHI_KEY_ID && env.KALSHI_PRIVATE_KEY) {
+    const ts = Date.now().toString();
+    const key = await getPrivateKey(env.KALSHI_PRIVATE_KEY);
+    const sig = await crypto.subtle.sign(
+      { name: "RSA-PSS", saltLength: 32 },
+      key,
+      new TextEncoder().encode(ts + method + path),
+    );
+    h["KALSHI-ACCESS-KEY"] = env.KALSHI_KEY_ID;
+    h["KALSHI-ACCESS-TIMESTAMP"] = ts;
+    h["KALSHI-ACCESS-SIGNATURE"] = bufToB64(sig);
+  }
+  return h;
+}
+async function getPrivateKey(pem) {
+  if (_privKey) return _privKey;
+  const der = pemToDer(pem);
+  _privKey = await crypto.subtle.importKey("pkcs8", der, { name: "RSA-PSS", hash: "SHA-256" }, false, ["sign"]);
+  return _privKey;
+}
+function pemToDer(pem) {
+  const b64 = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  const bin = atob(b64);
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u.buffer;
+}
+function bufToB64(buf) {
+  const u = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+  return btoa(s);
+}
+
+/* ---- helpers ---- */
+async function tryFetch(target, headers) {
+  try { return await fetch(target, { method: "GET", headers }); } catch (e) { return null; }
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function cors(resp) {
@@ -85,9 +129,9 @@ function cors(resp) {
   resp.headers.set("Access-Control-Allow-Headers", "*");
   return resp;
 }
-function withCors(resp, cacheState) {
+function withCors(resp, state) {
   const h = new Headers(resp.headers);
-  h.set("x-proxy-cache", cacheState);
+  h.set("x-proxy-cache", state);
   return cors(new Response(resp.body, { status: 200, headers: h }));
 }
 function json(obj, status = 200) {
