@@ -327,6 +327,9 @@
   .leg-line.miss .legmark{color:var(--red)}
   .leg-line.miss .pitcher{color:var(--red);text-decoration:line-through;text-decoration-color:var(--red-dim)}
   .leg-line.miss{opacity:.7}
+  .leg-line .actualk{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);margin-left:7px;white-space:nowrap}
+  .leg-line.hit .actualk{color:var(--green)}
+  .leg-line.miss .actualk{color:var(--red)}
   .ticket-foot{
     display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 18px;
     background:rgba(0,0,0,.18);flex-wrap:wrap;
@@ -873,7 +876,7 @@ function renderBoard(){
       <div class="leg-line ${res}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
         <div class="num">${String(i+1).padStart(2,"0")}</div>
         <div class="pitcher">${esc(l.pitcher||"—")}</div>
-        <div class="prop">${l.market==="Strikeouts" ? `<b>${esc(l.line)}+</b> K` : `<b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}`}</div>
+        <div class="prop">${l.market==="Strikeouts" ? `<b>${esc(l.line)}+</b> K` : `<b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}`}${l.actual!=null?`<span class="actualk">→ ${esc(String(l.actual))}${l.market==="Strikeouts"?" K":""}</span>`:""}</div>
         <div class="odds">${l.odds!==""?fmtMult(l.odds):"—"}</div>
         <div class="legmark">${mark}</div>
       </div>`;}).join("");
@@ -1852,8 +1855,8 @@ function annotateK(rows){
 /* ============================================================
    AUTO-GRADE  (settle pending tickets from final boxscores)
    ============================================================ */
-async function getStatusMap(date){
-  if(statusCache[date]) return statusCache[date];
+async function getStatusMap(date, fresh){
+  if(!fresh && statusCache[date]) return statusCache[date];   // fresh=true to detect games flipping to Final
   const d = await jget(`${MLB}/schedule?sportId=1&date=${date}&hydrate=probablePitcher`);
   const map={};
   (d.dates[0]?.games||[]).forEach(g=>{
@@ -1865,8 +1868,8 @@ async function getStatusMap(date){
   });
   statusCache[date]=map; return map;
 }
-async function getBox(gamePk){
-  if(boxCache[gamePk]) return boxCache[gamePk];
+async function getBox(gamePk, fresh){
+  if(!fresh && boxCache[gamePk]) return boxCache[gamePk];   // fresh=true for grading a final game (pre-game box may be cached)
   const b = await jget(`${MLB}/game/${gamePk}/boxscore`);
   boxCache[gamePk]=b; return b;
 }
@@ -1887,47 +1890,52 @@ function findPitcher(box, personId, name){
 /* returns 'win' | 'loss' | 'push' | null(ungradable) for one leg */
 async function gradeLeg(leg, date){
   let gamePk=leg.gamePk;
-  const smap=await getStatusMap(date);
+  const smap=await getStatusMap(date, true);    // fresh status so a finished game is seen as Final
   if(!gamePk){ gamePk=smap["name:"+(leg.pitcher||"").toLowerCase()]; }
   if(!gamePk) return null;
   if(smap[gamePk] && smap[gamePk].state!=="Final") return null;
-  const box=await getBox(gamePk);
+  const box=await getBox(gamePk, true);         // fresh box for the final game (pre-game box may be cached)
   const pl=findPitcher(box, leg.personId, leg.pitcher);
   if(!pl || !pl.stats?.pitching || Object.keys(pl.stats.pitching).length===0) return "push"; // scratched / didn't pitch → books void the leg
   const ps=pl.stats.pitching;
   const note=(ps.note||"").toUpperCase();   // e.g. (W, 13-6) / (L, 1-3)
   const line=parseFloat(leg.line);
 
+  let res=null;
   if(leg.market==="Pitching Win"){
     const won=note.includes("(W");
-    return ( (leg.side==="Yes"&&won) || (leg.side==="No"&&!won) ) ? "win":"loss";
-  }
-  if(leg.market==="Record a No-Decision"){
+    res=( (leg.side==="Yes"&&won) || (leg.side==="No"&&!won) ) ? "win":"loss";
+  } else if(leg.market==="Record a No-Decision"){
     const decided=note.includes("(W")||note.includes("(L");
     const nd=!decided;
-    return ( (leg.side==="Yes"&&nd) || (leg.side==="No"&&!nd) ) ? "win":"loss";
+    res=( (leg.side==="Yes"&&nd) || (leg.side==="No"&&!nd) ) ? "win":"loss";
+  } else {
+    // numeric markets
+    let actual;
+    if(leg.market==="Hits + Walks Allowed (WHIP)") actual=(ps.hits||0)+(ps.baseOnBalls||0);
+    else actual = ps[MARKET_STAT[leg.market]];
+    if(actual===undefined || isNaN(line)) return null;
+    leg.actual = actual;                       // record the real number (e.g. strikeouts thrown)
+    // Strikeouts use Kalshi "N+" threshold semantics: win if the pitcher reaches N
+    // or more (no push). `actual >= line` works for whole lines (5) and legacy .5 (4.5).
+    if(leg.market==="Strikeouts"){
+      const hit = actual >= line;
+      res=( ((leg.side==="Over"||leg.side==="Yes")&&hit) || ((leg.side==="Under"||leg.side==="No")&&!hit) ) ? "win":"loss";
+    } else if(actual===line){ res="push"; }
+    else { const over=actual>line; res=( (leg.side==="Over"&&over) || (leg.side==="Under"&&!over) ) ? "win":"loss"; }
   }
-  // numeric markets
-  let actual;
-  if(leg.market==="Hits + Walks Allowed (WHIP)") actual=(ps.hits||0)+(ps.baseOnBalls||0);
-  else actual = ps[MARKET_STAT[leg.market]];
-  if(actual===undefined || isNaN(line)) return null;
-  // Strikeouts use Kalshi "N+" threshold semantics: win if the pitcher reaches N
-  // or more (no push). `actual >= line` works for whole lines (5) and legacy .5 (4.5).
-  if(leg.market==="Strikeouts"){
-    const hit = actual >= line;
-    return ( ((leg.side==="Over"||leg.side==="Yes")&&hit) || ((leg.side==="Under"||leg.side==="No")&&!hit) ) ? "win":"loss";
-  }
-  if(actual===line) return "push";
-  const over = actual>line;
-  return ( (leg.side==="Over"&&over) || (leg.side==="Under"&&!over) ) ? "win":"loss";
+  // auto-mark the leg hit/miss (mirrors the manual ✓/✗ toggle)
+  if(res==="win") leg.result="hit"; else if(res==="loss") leg.result="miss";
+  return res;
 }
 
-async function gradeAll(){
+async function gradeAll(opts={}){
+  const silent=!!opts.silent;
   const pend=parlays.filter(p=>p.status==="pending");
-  if(pend.length===0){ toast("No pending tickets to settle"); return; }
+  if(pend.length===0){ if(!silent) toast("No pending tickets to settle"); return 0; }
   const btn=document.getElementById("gradeBtn");
-  btn.disabled=true; const old=btn.textContent; btn.textContent="⚾ Settling…";
+  let old;
+  if(btn && !silent){ btn.disabled=true; old=btn.textContent; btn.textContent="⚾ Settling…"; }
   let settled=0, skipped=0;
   try{
     for(const p of pend){
@@ -1941,9 +1949,20 @@ async function gradeAll(){
         settled++;
       }catch(e){ skipped++; }
     }
-    save(); renderAll();
-    toast(`Settled ${settled} ticket${settled!==1?"s":""}${skipped?` · ${skipped} not final yet`:""}`);
-  } finally { btn.disabled=false; btn.textContent=old; }
+    save(); renderAll();   // persists auto-marked legs + K counts even on skipped tickets
+    if(!silent) toast(`Settled ${settled} ticket${settled!==1?"s":""}${skipped?` · ${skipped} not final yet`:""}`);
+    else if(settled>0) toast(`Auto-settled ${settled} ticket${settled!==1?"s":""} from final results`);
+    return settled;
+  } finally { if(btn && !silent){ btn.disabled=false; btn.textContent=old; } }
+}
+
+// auto-settle finished games on a timer (and once shortly after load)
+let autoGradeTimer=null;
+function startAutoGrade(){
+  clearInterval(autoGradeTimer);
+  const tick=()=>{ if(parlays.some(p=>p.status==="pending")) gradeAll({silent:true}).catch(()=>{}); };
+  autoGradeTimer=setInterval(tick, 150000);   // every 2.5 min
+  setTimeout(tick, 4000);                       // and once shortly after load
 }
 
 /* ============================================================
@@ -2038,7 +2057,7 @@ document.getElementById("autoRefresh").addEventListener("change", e=>{
   clearInterval(autoTimer);
   if(e.target.checked){ autoTimer=setInterval(loadSlate, 45000); toast("Auto-refresh on (45s)"); }
 });
-document.getElementById("gradeBtn").addEventListener("click", gradeAll);
+document.getElementById("gradeBtn").addEventListener("click", ()=>gradeAll());
 document.getElementById("oddsSettingsBtn").addEventListener("click", ()=>{
   const el=document.getElementById("oddsSettings");
   el.hidden=!el.hidden;
@@ -2202,6 +2221,7 @@ document.getElementById("betDate").value = new Date().toISOString().slice(0,10);
 document.getElementById("slateDate").value = new Date().toISOString().slice(0,10);
 updateOddsKeyDot();
 renderLegs(); renderSummary(); renderAll();
+startAutoGrade();
 if(syncReady()){ setSync("on",""); syncNow(true); } else setSync("off","");
 </script>
 </body>
