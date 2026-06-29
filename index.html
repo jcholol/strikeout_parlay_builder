@@ -1538,9 +1538,9 @@ async function getTeamHitVsHand(teamId, season){
 /* day-of weather + home-plate umpire from the boxscore (when posted) */
 async function getGameContext(gamePk){
   if(gamePk in gameCtxCache) return gameCtxCache[gamePk];
-  const ctx={tempF:null, condition:"", wind:"", umpire:""};
+  const ctx={tempF:null, condition:"", wind:"", umpire:"", lineups:{}};
   try{
-    const b=await getBox(gamePk);
+    const b=await getBox(gamePk, true);   // fresh so a posted lineup shows up
     if(Array.isArray(b.officials)){
       const hp=b.officials.find(o=>/home plate/i.test(o.officialType||""));
       if(hp) ctx.umpire=hp.official?.fullName||"";
@@ -1550,6 +1550,16 @@ async function getGameContext(gamePk){
     if(w){ ctx.condition=(w.value||"").replace(/\.$/,""); const m=ctx.condition.match(/(\d+)\s*degree/i); if(m) ctx.tempF=+m[1]; }
     const wd=info.find(x=>/wind/i.test(x.label||""));
     if(wd) ctx.wind=(wd.value||"").replace(/\.$/,"");
+    // actual posted batting order → combined K rate from each hitter's embedded season stats
+    ["away","home"].forEach(s=>{
+      const t=b.teams?.[s]; if(!t?.team) return;
+      const order=t.battingOrder||[];
+      if(order.length>=9){
+        let so=0,pa=0;
+        order.forEach(id=>{ const bb=t.players?.["ID"+id]?.seasonStats?.batting; if(bb){ so+=+bb.strikeOuts||0; pa+=+bb.plateAppearances||0; } });
+        if(pa>0) ctx.lineups[t.team.id]={so,pa};
+      }
+    });
   }catch(e){}
   return gameCtxCache[gamePk]=ctx;
 }
@@ -1636,6 +1646,7 @@ async function analyzeK(){
   const btn=document.getElementById("analyzeK"); btn.disabled=true; const old=btn.textContent; btn.textContent="🔎 Crunching…";
   const out=document.getElementById("kResults");
   out.innerHTML=`<div class="kpanel"><h3>Analyzing strikeout matchups…</h3></div>`;
+  Object.keys(gameCtxCache).forEach(k=>delete gameCtxCache[k]);   // re-pull weather/ump + posted lineups fresh
   try{
     const {games, statById, season}=slateState;
     const leagueK=await getLeagueK(season);
@@ -1649,10 +1660,22 @@ async function analyzeK(){
         const pStat=statById[pp.id] || await getPitcherStat(pp.id, season);
         // handedness: use the opponent lineup's split vs THIS pitcher's hand, fall back to overall
         const hand=await getPitcherHand(pp.id);
+        const ctx=await getGameContext(g.gamePk);   // fresh box: weather/ump + posted lineups
         const vsHand=await getTeamHitVsHand(opp.team.id, season);
         const overallHit=await getTeamHit(opp.team.id, season);
         const splitHit=(hand && vsHand[hand] && +vsHand[hand].plateAppearances>50) ? vsHand[hand] : null;
-        const oppHit=splitHit||overallHit;
+        // opponent K rate: prefer the ACTUAL posted lineup (skewed for handedness), else team-season
+        const lu=ctx.lineups[opp.team.id];
+        let oppHit=splitHit||overallHit, lineupUsed=false, lineupK=null;
+        if(lu && lu.pa>120){
+          const overallK=overallHit?(+overallHit.strikeOuts)/(+overallHit.plateAppearances):null;
+          const vsHandK=splitHit?(+splitHit.strikeOuts)/(+splitHit.plateAppearances):overallK;
+          const handRatio=(overallK&&vsHandK)?vsHandK/overallK:1;   // how this team skews vs the pitcher's hand
+          lineupK=lu.so/lu.pa;
+          const adjK=Math.max(0.10, Math.min(0.40, lineupK*handRatio));
+          oppHit={strikeOuts:adjK, plateAppearances:1};
+          lineupUsed=true;
+        }
         const m=projectK(pStat, oppHit, leagueK);
         if(!m) continue;
         const back=await getPlayerIL(pp.id, season, slateState.date);
@@ -1662,7 +1685,6 @@ async function analyzeK(){
         const l3=log.slice(-3).map(s=>({ k:s.stat.strikeOuts, opp:(info[s.opponent?.id]?.abbr)||shortName(s.opponent?.name||""), home:s.isHome }));
         const startsSince = back ? log.filter(s=> s.date>=back.activation && (+s.stat.gamesStarted)>=1).length : null;
         // environmental adjustments: park, weather, workload
-        const ctx=await getGameContext(g.gamePk);
         const parkF=parkKFactor(g.venue?.name);
         const weatherF=weatherKFactor(ctx.tempF);
         const work=workloadAdjust(log, slateState.date);
@@ -1678,7 +1700,7 @@ async function analyzeK(){
           oppRecord: opp.leagueRecord ? `${opp.leagueRecord.wins}-${opp.leagueRecord.losses}` : "",
           oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
           venue: g.venue?.name || "",
-          hand, oppSplit:!!splitHit,
+          hand, oppSplit:!!splitHit, lineupUsed, lineupK,
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
           temp:ctx.tempF, weather:ctx.condition, wind:ctx.wind, umpire:ctx.umpire,
           startTime: fmtTime(g.gameDate),
@@ -1724,10 +1746,12 @@ function lineupNote(r, leagueK){
   const tags=[];
   if(r.oppRecord) tags.push(`${r.oppAb} ${r.oppRecord}`);
   const diff=(r.oppK-leagueK)*100;
-  if(diff>=2) tags.push(r.oppSplit?`whiff-prone vs ${r.hand==="L"?"LHP":"RHP"}`:"whiff-prone lineup");
-  else if(diff>=0.7) tags.push("above-avg K lineup");
-  else if(diff<=-2) tags.push("tough contact");
-  else tags.push("avg contact");
+  let desc;
+  if(diff>=2) desc=r.oppSplit?`whiff-prone vs ${r.hand==="L"?"LHP":"RHP"}`:"whiff-prone lineup";
+  else if(diff>=0.7) desc="above-avg K lineup";
+  else if(diff<=-2) desc="tough contact";
+  else desc="avg contact";
+  tags.push(r.lineupUsed ? "📋 "+desc : desc);   // 📋 = actual posted lineup, not season avg
   if(r.venue) tags.push(`${r.venue}${r.parkF&&Math.abs(r.parkF-1)>=0.02?` (${r.parkF>1?"+":""}${((r.parkF-1)*100).toFixed(0)}% K)`:""}`);
   if(r.temp!=null) tags.push(`${r.temp}°${r.weather&&!/^\d+\s*degree/i.test(r.weather)?" "+r.weather.replace(/^\d+\s*degrees?,?\s*/i,""):""}`);
   return { tags:tags.slice(0,4), favorable: diff>=0.7 };
