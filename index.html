@@ -1969,14 +1969,16 @@ function renderKResults(rows, leagueK){
       <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="11" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
-      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent momentum (win/loss streak + recent K-form)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg, or ⓘ for the math. Projection, not a guarantee.
+      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent momentum (win/loss streak + recent K-form)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
     </div>
   </div>`;
   out.querySelectorAll(".krank tbody tr:not(.why-row)").forEach(tr=>{
     tr.addEventListener("click",()=>{
       const r=rows.find(x=>x.id==tr.dataset.pid);
-      // line at the rounded projection .5 under; Kalshi odds for that target auto-fill
-      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts", line:String(Math.round(r.proj))});
+      // default the line to the same 64%-confidence-floor target the Suggested Parlay uses
+      // (the highest line still clearing 64%) — NOT the raw rounded projection, which for
+      // half-K projections is a sub-coin-flip. Kalshi odds for that target auto-fill.
+      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts", line:String(candFromRow(r).target)});
     });
   });
   // ⓘ → toggle the per-row "why this target?" breakdown (without adding a leg)
