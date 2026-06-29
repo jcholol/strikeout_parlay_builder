@@ -1309,15 +1309,26 @@ function wireSlate(){
   });
 }
 
-function addLegFromSlate({pitcher,personId,gamePk,market}){
+function addLegFromSlate({pitcher,personId,gamePk,market,line}){
   // reuse the first empty draft leg, else append
   let leg = draftLegs.find(l=>!l.pitcher.trim());
   if(!leg){ leg=newLeg(); draftLegs.push(leg); }
   leg.pitcher=pitcher; leg.personId=personId; leg.gamePk=gamePk;
   leg.market=market;
   leg.side = (market==="Pitching Win") ? "Yes" : "Over";
+  if(line!=null && leg.line==="") leg.line=String(line);
+  // auto-fill the live Kalshi price for strikeout legs
+  if(market==="Strikeouts"){
+    const o=kalshiOdds[normName(pitcher)];
+    if(o && o.rungs.length){
+      const target = leg.line!=="" ? Math.round(+leg.line+0.5) : 5;   // Over 4.5 → 5+
+      let rung = o.rungs.find(r=>r.target===target);
+      if(!rung && leg.line==="") rung = o.rungs.find(r=>r.target>=5) || o.rungs[0];
+      if(rung){ if(leg.line==="") leg.line=String(rung.line); leg.odds=String(rung.am); }
+    }
+  }
   renderLegs(); renderSummary();
-  toast(`${pitcher} · ${market} added to builder`);
+  toast(`${pitcher} · ${market} added${leg.odds!==""?` @ ${fmtAm(+leg.odds)}`:""}`);
   // Don't yank the page on every click — let the user stack several legs from the
   // slate first, then scroll down to the builder once they've paused.
   scheduleScrollToBuilder();
@@ -1781,10 +1792,8 @@ function renderKResults(rows, leagueK){
   out.querySelectorAll(".krank tbody tr").forEach(tr=>{
     tr.addEventListener("click",()=>{
       const r=rows.find(x=>x.id==tr.dataset.pid);
-      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts"});
-      // pre-fill a sensible line at the rounded projection .5 under
-      const leg=draftLegs.find(l=>l.personId==tr.dataset.pid);
-      if(leg && !leg.line){ leg.line=(Math.round(r.proj)-0.5).toFixed(1); leg.side="Over"; renderLegs(); renderSummary(); }
+      // line at the rounded projection .5 under; Kalshi odds for that target auto-fill
+      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts", line:(Math.round(r.proj)-0.5).toFixed(1)});
     });
   });
   out.querySelectorAll(".legbtn").forEach(b=>{
