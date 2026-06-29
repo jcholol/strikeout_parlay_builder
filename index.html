@@ -592,7 +592,7 @@
     <!-- TRACKER -->
     <section class="panel">
       <h2>The Board
-        <button class="btn ghost sm" id="gradeBtn" title="Pull final results and settle pending tickets">⚾ Settle from Results</button>
+        <button class="btn ghost sm" id="gradeBtn" title="Pull final results: record strikeouts, mark each leg, settle finished tickets">↻ Refresh Results</button>
         <div class="tabs" id="tabs">
           <button class="tab active" data-f="all">All</button>
           <button class="tab" data-f="pending">Pending</button>
@@ -1956,13 +1956,21 @@ async function gradeAll(opts={}){
   } finally { if(btn && !silent){ btn.disabled=false; btn.textContent=old; } }
 }
 
-// auto-settle finished games on a timer (and once shortly after load)
-let autoGradeTimer=null;
+// auto-settle finished games: on load, when you return to the tab, on a button,
+// and a light periodic check while the page stays open
+let autoGradeTimer=null, _lastAutoGrade=0;
+function autoSettle(force){
+  if(!force && Date.now()-_lastAutoGrade < 30000) return;   // throttle bursts of focus events
+  if(!parlays.some(p=>p.status==="pending")) return;        // nothing to settle
+  _lastAutoGrade=Date.now();
+  gradeAll({silent:true}).catch(()=>{});
+}
 function startAutoGrade(){
   clearInterval(autoGradeTimer);
-  const tick=()=>{ if(parlays.some(p=>p.status==="pending")) gradeAll({silent:true}).catch(()=>{}); };
-  autoGradeTimer=setInterval(tick, 150000);   // every 2.5 min
-  setTimeout(tick, 4000);                       // and once shortly after load
+  setTimeout(()=>autoSettle(true), 4000);                            // shortly after load / refresh
+  autoGradeTimer=setInterval(()=>autoSettle(true), 150000);          // periodic while open
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) autoSettle(false); }); // return to tab
+  window.addEventListener("focus", ()=>autoSettle(false));
 }
 
 /* ============================================================
