@@ -1984,7 +1984,7 @@ function applyOdds(gamePk, odd){
    Kalshi blocks direct browser calls, so requests go: site → Worker → Kalshi.
    ============================================================ */
 const KALSHI_SERIES = "KXMLBKS";
-const KALSHI_PROXY_DEFAULT = "";   // hardcode your Worker URL here to enable for all visitors
+const KALSHI_PROXY_DEFAULT = "https://kalshi-proxy.jonathancho99.workers.dev";   // shared Worker → live Kalshi odds for all visitors
 function kalshiBase(){ return ((localStorage.getItem("bullpen.kalshiproxy")||KALSHI_PROXY_DEFAULT)||"").replace(/\/+$/,""); }
 let kalshiOdds = {};   // normName -> { rungs:[{target,line,ask,bid,am,dec}], event, pname }
 
