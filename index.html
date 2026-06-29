@@ -1226,6 +1226,7 @@ const boxCache = {};   // gamePk -> boxscore json
 const statusCache = {};// date -> {gamePk: {state, away, home}}
 const pitcherStatCache = {}; // "season:id" -> stat
 const teamHitCache = {};     // "season:teamId" -> stat
+const teamFormCache = {};    // "season:teamId:asOf" -> {streak, recentK, recentPA, wl, n}
 const teamHitHandCache = {}; // "season:teamId" -> {L:stat, R:stat} (vs LHP / vs RHP)
 const personCache = {};      // id -> people record (for throw hand)
 const gameCtxCache = {};     // gamePk -> {tempF, condition, wind, umpire}
@@ -1422,6 +1423,29 @@ async function getTeamHit(teamId, season){
     const sp=d.stats?.[0]?.splits;
     return teamHitCache[k]=(sp&&sp.length)?sp[0].stat:null;
   }catch(e){ return teamHitCache[k]=null; }
+}
+/* opponent momentum: recent K-form + win/loss streak from the team's hitting game log.
+   "Hot swinging" teams (striking out less than their season norm, or riding a win streak)
+   make a high-K arm a softer leg — baseball runs on momentum. */
+async function getTeamForm(teamId, season, asOf){
+  const k=season+":"+teamId+":"+asOf;
+  if(k in teamFormCache) return teamFormCache[k];
+  let out=null;
+  try{
+    const d=await jget(`${MLB}/teams/${teamId}/stats?stats=gameLog&group=hitting&season=${season}`);
+    let sp=(d.stats?.[0]?.splits||[]).filter(x=>x.date && x.date<=asOf);
+    sp.sort((a,b)=>a.date.localeCompare(b.date));         // oldest→newest
+    if(sp.length){
+      const recent=sp.slice(-10);
+      let so=0,pa=0,w=0,l=0;
+      recent.forEach(x=>{ so+=+x.stat.strikeOuts||0; pa+=+x.stat.plateAppearances||0; (x.isWin?w++:l++); });
+      // streak: walk newest→oldest counting consecutive same result
+      const newestWin=sp[sp.length-1].isWin; let n=0;
+      for(let i=sp.length-1;i>=0 && sp[i].isWin===newestWin;i--) n++;
+      out={ streak:{type:newestWin?"W":"L", n}, recentK: pa? so/pa : null, recentPA: pa, wl:{w,l}, n:recent.length };
+    }
+  }catch(e){}
+  return teamFormCache[k]=out;
 }
 function parseInjury(desc){
   const rest=desc.split(/injured list\.?/i)[1]; if(!rest) return "";
@@ -1687,13 +1711,32 @@ async function analyzeK(opts={}){
         const ilBackDays = back ? back.backDays : null;
         const ilDaysOut = back ? back.daysOut : null;
         const log=await getGameLog(pp.id, season);
-        const l3=log.slice(-3).map(s=>({ k:s.stat.strikeOuts, opp:(info[s.opponent?.id]?.abbr)||shortName(s.opponent?.name||""), home:s.isHome }));
+        const l5=log.slice(-5).map(s=>({ k:s.stat.strikeOuts, opp:(info[s.opponent?.id]?.abbr)||shortName(s.opponent?.name||""), home:s.isHome }));
         const startsSince = back ? log.filter(s=> s.date>=back.activation && (+s.stat.gamesStarted)>=1).length : null;
-        // environmental adjustments: park, weather, workload
+        // his K the last time he faced THIS opponent (this season's log; else prior season)
+        let vsOppLast=null;
+        const vsThis=log.filter(s=> s.opponent?.id===opp.team.id);
+        if(vsThis.length){ const s=vsThis[vsThis.length-1]; vsOppLast={ k:+s.stat.strikeOuts||0, date:s.date, ip:s.stat.inningsPitched, season }; }
+        else { const prev=await getGameLog(pp.id, season-1); const pv=prev.filter(s=> s.opponent?.id===opp.team.id);
+               if(pv.length){ const s=pv[pv.length-1]; vsOppLast={ k:+s.stat.strikeOuts||0, date:s.date, ip:s.stat.inningsPitched, season:season-1 }; } }
+        // opponent momentum: how the lineup is trending vs ITS OWN season norm (not the
+        // handedness baseline), weighted by recent sample, plus a small streak nudge. A team
+        // making more contact lately than usual softens a high-K leg.
+        const form=await getTeamForm(opp.team.id, season, slateState.date);
+        const oppSeasonK = overallHit && +overallHit.plateAppearances ? (+overallHit.strikeOuts)/(+overallHit.plateAppearances) : m.oppK;
+        let momentumF=1.00;
+        if(form && form.recentK!=null && oppSeasonK>0){
+          const w=Math.min(0.5, form.recentPA/250);
+          momentumF = 1 + w*(form.recentK/oppSeasonK - 1);             // recent vs the team's norm
+          if(form.streak.type==="W" && form.streak.n>=4) momentumF*=0.98;       // hot, confident bats
+          else if(form.streak.type==="L" && form.streak.n>=4) momentumF*=1.01;   // cold, pressing
+          momentumF=Math.max(0.88, Math.min(1.10, momentumF));
+        }
+        // environmental adjustments: park, weather, workload, momentum
         const parkF=parkKFactor(g.venue?.name);
         const weatherF=weatherKFactor(ctx.tempF);
         const work=workloadAdjust(log, slateState.date);
-        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor);
+        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF);
         m.projBase=m.proj; m.proj=adjProj;
         rows.push({
           name:pp.fullName, id:pp.id, gamePk:g.gamePk,
@@ -1707,9 +1750,12 @@ async function analyzeK(opts={}){
           venue: g.venue?.name || "",
           hand, oppSplit:!!splitHit, lineupUsed, lineupK,
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
+          momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
+          oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
+          vsOppLast, season,
           temp:ctx.tempF, weather:ctx.condition, wind:ctx.wind, umpire:ctx.umpire,
           startTime: fmtTime(g.gameDate),
-          l3,
+          l5,
           ...m
         });
       }
@@ -1741,9 +1787,10 @@ function pitcherNote(r){
     else if(r.lgRank.lgRank<=15) tags.push(`#${r.lgRank.lgRank} ${lgAbbr(r.lgRank.lgName)} K`);
   }
   if(r.gamesStarted>0){ const kPer=r.so/r.gamesStarted; if(kPer) tags.push(`${kPer.toFixed(1)} K/start`); }
-  const last=r.l3&&r.l3.length?r.l3[r.l3.length-1].k:null;
+  const last=r.l5&&r.l5.length?r.l5[r.l5.length-1].k:null;
   if(last!=null && last>=9) tags.push(`${last} K last out 🔥`);
-  return tags.slice(0,4);
+  if(r.vsOppLast) tags.push(`${r.vsOppLast.k} K vs ${r.oppAb} ${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""}`);
+  return tags.slice(0,5);
 }
 /* short qualitative descriptors for the lineup side (incl. park + weather, which
    are folded into the projection) */
@@ -1757,9 +1804,17 @@ function lineupNote(r, leagueK){
   else if(diff<=-2) desc="tough contact";
   else desc="avg contact";
   tags.push(r.lineupUsed ? "📋 "+desc : desc);   // 📋 = actual posted lineup, not season avg
+  // momentum: win/loss streak + recent K-form vs the projection's lineup rate
+  let hot=false;
+  if(r.oppStreak && r.oppStreak.n>=3){ const s=r.oppStreak; tags.push(`${s.type==="W"?"🔥":"🧊"} ${s.type}${s.n}`); if(s.type==="W"&&s.n>=4) hot=true; }
+  const oppBase=r.oppSeasonK||r.oppK;
+  if(r.oppRecentK!=null && oppBase>0){
+    const d=(r.oppRecentK/oppBase-1)*100;   // recent K-rate vs the team's season norm
+    if(Math.abs(d)>=4){ tags.push(`K${d<0?"↓":"↑"} ${Math.abs(d).toFixed(0)}% L${r.oppWL?(r.oppWL.w+r.oppWL.l):"10"}`); if(d<=-6) hot=true; }
+  }
   if(r.venue) tags.push(`${r.venue}${r.parkF&&Math.abs(r.parkF-1)>=0.02?` (${r.parkF>1?"+":""}${((r.parkF-1)*100).toFixed(0)}% K)`:""}`);
   if(r.temp!=null) tags.push(`${r.temp}°${r.weather&&!/^\d+\s*degree/i.test(r.weather)?" "+r.weather.replace(/^\d+\s*degrees?,?\s*/i,""):""}`);
-  return { tags:tags.slice(0,4), favorable: diff>=0.7 };
+  return { tags:tags.slice(0,6), favorable: diff>=0.7 && !hot, hot };
 }
 
 /* Build a parlay suggestion aimed at a high-K target (5+) from the most confident
@@ -1771,37 +1826,50 @@ function estLegDecimal(p){
   const implied = Math.min(0.93, p + 0.045);
   return 1/implied;
 }
+// is the opponent "hot" (momentum against the K leg)? — riding a 4+ win streak or
+// striking out notably less than their season norm (momentum factor pulled the proj down).
+function oppHot(r){ return (r.oppStreak && r.oppStreak.type==="W" && r.oppStreak.n>=4) || (r.momentumF!=null && r.momentumF<0.97); }
+const KFLOOR=0.64;   // confidence floor: the highest line we'll reach for on a leg
+// build the priced candidate leg for a row. The target is ALWAYS the most aggressive line that
+// still clears KFLOOR — independent of how many legs we need — so growing the parlay never makes
+// an existing leg over-aggressive. A leg that can't even clear 5+ at the floor stays at 5 (soft).
+function candFromRow(r){
+  let target=5, p=poissonGE(r.proj,5);
+  for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=KFLOOR){target=t;p=pt;} else break; }
+  let dec=estLegDecimal(p), live=false;
+  const kr=kalshiRung(r.name, target);
+  if(kr){ target=kr.target; dec=kr.dec; live=true; p=poissonGE(r.proj, kr.target); }
+  // "strong" = clears its target at ≥65% AND the opponent isn't hot
+  const strong = p>=0.65 && !oppHot(r);
+  return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line:target, p, dec, live, strong, hot:oppHot(r), r };
+}
 function recommendParlay(rows, nLegs){
   const eligible = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5);
-  // adaptively relax the per-leg confidence floor until we have at least 2 legs
-  let cand=[];
-  for(const FLOOR of [0.64, 0.60, 0.56]){
-    cand = eligible.map(r=>{
-      let target=5, p=poissonGE(r.proj,5);
-      if(p<FLOOR) return null;                          // can't even clear 5+ confidently
-      for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=FLOOR){target=t;p=pt;} else break; }
-      // use the real Kalshi price when that pitcher's market is loaded, else estimate
-      let dec=estLegDecimal(p), live=false;
-      const kr=kalshiRung(r.name, target);
-      if(kr){ target=kr.target; dec=kr.dec; live=true; p=poissonGE(r.proj, kr.target); }
-      return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target, line:target, p, dec, live };
-    }).filter(Boolean);
-    if(cand.length>=2) break;
-  }
-  if(cand.length<2) return null;
-  cand.sort((a,b)=> b.proj-a.proj || b.dec-a.dec);     // best arms first (aggressive but confident)
+  // every eligible arm is a candidate (priced at the fixed confidence floor); we show the best
+  // ones even when they're soft, so the SKIP signal still reveals what was considered.
+  let cand=eligible.map(candFromRow);
+  if(!cand.length) return null;
+  cand.sort((a,b)=> b.strong-a.strong || b.proj-a.proj || b.dec-a.dec); // strong arms first
   const combDec = ls=>ls.reduce((a,c)=>a*c.dec,1);
   const combP   = ls=>ls.reduce((a,c)=>a*c.p,1);
   let legs;
   if(nLegs){
     legs = cand.slice(0, Math.min(nLegs, cand.length));  // user picked the leg count
   } else {
-    legs = cand.slice(0,2);                              // auto: grow until ~2x payout
-    let i=2;
-    while(combDec(legs) < 2.0 && i<cand.length && legs.length<4){ legs.push(cand[i++]); }
+    legs = cand.slice(0,Math.min(2,cand.length));        // auto: grow toward ~2x payout,
+    let i=legs.length;                                    // but only with STRONG legs (cand is
+    while(combDec(legs) < 2.0 && i<cand.length && legs.length<4 && cand[i].strong){ legs.push(cand[i++]); } // sorted strong-first, so stop at the first soft arm)
   }
-  const dec=combDec(legs);
-  return { legs, combined: combP(legs), dec, american: decToAm(dec), shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
+  const dec=combDec(legs), combined=combP(legs);
+  const n=legs.length, strongCount=legs.filter(l=>l.strong).length;
+  // verdict reflects per-leg CONVICTION (the sweep % is shown separately): GO when every leg is
+  // strong, LEAN when the parlay mixes in soft/hot-matchup legs, SKIP when no leg is strong.
+  let verdict, reason;
+  if(strongCount===0){ verdict="SKIP"; reason=`no leg clears 65% against a cold matchup — consider skipping today`; }
+  else if(strongCount===n && n>=2){ verdict="GO"; reason=`all ${n} legs strong — ${(combined*100).toFixed(0)}% to sweep`; }
+  else if(strongCount>=2){ verdict="LEAN"; reason=`${strongCount}/${n} legs strong — drop the soft ${n-strongCount} or stake small`; }
+  else { verdict="LEAN"; reason=`only 1 strong leg — lean small or pass`; }
+  return { legs, combined, dec, american: decToAm(dec), strongCount, verdict, reason, shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
 }
 
 function buildRecommendedParlay(legs){
@@ -1822,6 +1890,32 @@ function buildRecommendedParlay(legs){
   scheduleScrollToBuilder();
 }
 
+/* a multiplier (e.g. 0.97) → signed percent ("-3%") for the explanation panel */
+function pctDelta(f){ if(f==null) return "0%"; const d=(f-1)*100; if(Math.abs(d)<0.5) return "0%"; return (d>0?"+":"")+d.toFixed(0)+"%"; }
+/* the clickable "why N+?" breakdown — Poisson ladder + the floor rule + every factor that
+   built the projection, so a target is never a black box. */
+function explainTarget(r, leagueK){
+  const ladder=[5,6,7,8].map(t=>({t, p:poissonGE(r.proj,t)}));
+  let chosen=null; for(let t=5;t<=9;t++){ if(poissonGE(r.proj,t)>=0.64) chosen=t; else break; }
+  const nextT=chosen?chosen+1:5, nextP=poissonGE(r.proj,nextT);
+  const strong = chosen && poissonGE(r.proj, chosen)>=0.65 && !oppHot(r);
+  const L=[];
+  L.push(`<b>Why ${chosen?chosen+"+":"under 5"} K?</b> We bet the highest line still ≥64% (our confidence floor).`);
+  L.push(`Ladder: ${ladder.map(x=>`${x.t}+ <b>${(x.p*100).toFixed(0)}%</b>`).join(" · ")}`);
+  if(chosen) L.push(`${chosen}+ clears at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}%; ${nextT}+ is only ${(nextP*100).toFixed(0)}% — below the floor, so we don't stretch for it.`);
+  else L.push(`Even 5+ sits under the 64% floor — not a play.`);
+  L.push(`Verdict: <b style="color:${strong?'var(--green)':'var(--amber)'}">${strong?'STRONG':'soft'}</b>${oppHot(r)?` · opponent hot${r.oppStreak&&r.oppStreak.type==="W"&&r.oppStreak.n>=4?` (W${r.oppStreak.n})`:""}${r.momentumF!=null&&r.momentumF<0.97?`, making more contact lately`:""}`:''}`);
+  const mults=[];
+  if(Math.abs((r.parkF||1)-1)>=0.005) mults.push(`park ${pctDelta(r.parkF)}`);
+  if(Math.abs((r.weatherF||1)-1)>=0.005) mults.push(`weather ${pctDelta(r.weatherF)}`);
+  if(Math.abs((r.workFactor||1)-1)>=0.005) mults.push(`workload ${pctDelta(r.workFactor)}`);
+  if(Math.abs((r.momentumF||1)-1)>=0.005) mults.push(`momentum ${pctDelta(r.momentumF)}`);
+  L.push(`Proj ${(r.projBase!=null?r.projBase:r.proj).toFixed(1)} → <b>${r.proj.toFixed(1)} K</b>${mults.length?` (${mults.join(", ")})`:""}`);
+  L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`);
+  if(r.oppStreak) L.push(`Opp momentum: ${r.oppStreak.type}${r.oppStreak.n} streak${r.oppWL?`, ${r.oppWL.w}-${r.oppWL.l} last ${r.oppWL.w+r.oppWL.l}`:""}${r.oppRecentK!=null?`, recent K ${(r.oppRecentK*100).toFixed(1)}% vs ${((r.oppSeasonK||r.oppK)*100).toFixed(1)}% season`:""}`);
+  if(r.vsOppLast) L.push(`Last time vs ${esc(r.oppAb)}: <b>${r.vsOppLast.k} K</b> (${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""})`);
+  return `<div style="font-family:'JetBrains Mono';font-size:10px;line-height:1.7;color:var(--ink-dim);padding:8px 10px;background:rgba(127,127,127,.08);border-radius:6px;margin-top:4px">${L.map(x=>`<div>${x}</div>`).join("")}</div>`;
+}
 function renderKResults(rows, leagueK){
   lastK={rows, leagueK}; kShown=true;
   const top=rows[0];
@@ -1843,20 +1937,27 @@ function renderKResults(rows, leagueK){
         <span class="krec-title">🎟️ Suggested Parlay</span>
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
-      ${rec ? `
+      ${rec ? (()=>{
+        const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
+        const vIcon  = rec.verdict==="GO"?"✅":rec.verdict==="SKIP"?"🛑":"⚠️";
+        return `
+      <div style="margin:4px 0 8px;padding:8px 12px;border-radius:8px;border:1px solid ${vColor};border-left:4px solid ${vColor};display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px">
+        <span style="font-size:16px;font-weight:800;letter-spacing:1px;color:${vColor}">${vIcon} ${rec.verdict}</span>
+        <span style="font-size:12px;color:var(--ink-dim)">${esc(rec.reason)}</span>
+      </div>
       <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ${rec.dec.toFixed(2)}× payout</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
-      <div class="krec-sub">${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
-      <div class="krec-legs">${rec.legs.map(l=>`<div class="krec-leg"><span class="krec-name">${esc(l.name)}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span></div>`).join("")}</div>
+      <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
+      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':' <span style="color:var(--amber);font-size:10px" title="soft — under 65% or hot opponent">soft</span>'}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button></div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK)}</div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
-      ` : `<div class="krec-sub">Not enough confident 5+ K legs on this slate to build a parlay.</div>`}
+      `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}
     </div>
     <table class="krank">
-      <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th>L3 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th title="MLB strikeout rank${mlbTotal?` among ${mlbTotal} qualified pitchers`:""}">K Rk${mlbTotal?` <span style="color:var(--ink-faint)">/${mlbTotal}</span>`:""}</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
+      <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th title="strikeouts in his last up-to-5 starts (most recent last)">L5 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th title="MLB strikeout rank${mlbTotal?` among ${mlbTotal} qualified pitchers`:""}">K Rk${mlbTotal?` <span style="color:var(--ink-faint)">/${mlbTotal}</span>`:""}</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
       <tbody>${rows.map((r,i)=>`<tr data-pid="${r.id}" data-game="${r.gamePk}" data-name="${esc(r.name)}">
         <td>${i+1}</td>
-        <td>${esc(r.name)}${r.bullpen?` <span class="flag bullpen" title="reliever/opener — likely a bullpen game, short outing">🪣 BULLPEN GAME</span>`:r.thin?` <span class="flag thin" title="real starter with few games (injury/call-up) — smaller sample">thin data</span>`:""}${(r.workFlags||[]).map(f=>` <span class="flag work" title="workload signal from recent game logs (not a news feed)">${esc(f)}</span>`).join("")}${r.ilBackDays!=null&&r.ilBackDays<=30?` <span class="flag il" title="days since activated from the injured list — may be on a pitch/innings limit">IL ${r.ilBackDays}d${r.startsSince!=null?` · ${r.startsSince} GS`:""}</span> <span class="flag out" title="length of the IL stint and the injury">${r.ilDaysOut!=null?`${r.ilDaysOut}d`:"?"} · ${r.ilReason?esc(r.ilReason):"reason n/a"}</span>`:""}</td>
+        <td>${esc(r.name)} <button class="info-btn" data-info="${r.id}-${r.gamePk}" title="why this target?" style="background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:50%;width:16px;height:16px;line-height:1;font-size:10px;cursor:pointer;padding:0">ⓘ</button>${r.bullpen?` <span class="flag bullpen" title="reliever/opener — likely a bullpen game, short outing">🪣 BULLPEN GAME</span>`:r.thin?` <span class="flag thin" title="real starter with few games (injury/call-up) — smaller sample">thin data</span>`:""}${(r.workFlags||[]).map(f=>` <span class="flag work" title="workload signal from recent game logs (not a news feed)">${esc(f)}</span>`).join("")}${r.ilBackDays!=null&&r.ilBackDays<=30?` <span class="flag il" title="days since activated from the injured list — may be on a pitch/innings limit">IL ${r.ilBackDays}d${r.startsSince!=null?` · ${r.startsSince} GS`:""}</span> <span class="flag out" title="length of the IL stint and the injury">${r.ilDaysOut!=null?`${r.ilDaysOut}d`:"?"} · ${r.ilReason?esc(r.ilReason):"reason n/a"}</span>`:""}</td>
         <td style="text-align:left;font-family:'JetBrains Mono';font-size:11px;color:var(--ink-dim)">${esc(r.team)} v ${esc(r.oppAb)}<div class="cell-note" style="margin-left:0">${esc(r.startTime||"")}${r.umpire?` · HP ${esc(r.umpire.split(" ").slice(-1)[0])}`:""}</div></td>
-        <td style="font-family:'JetBrains Mono';font-size:11px;color:var(--chalk)">${r.l3&&r.l3.length?r.l3.map(g=>`${g.k} ${g.home?"v":"@"}${esc(g.opp)}`).join(" · "):"–"}</td>
+        <td style="font-family:'JetBrains Mono';font-size:11px;color:var(--chalk)">${r.l5&&r.l5.length?r.l5.map(g=>`${g.k} ${g.home?"v":"@"}${esc(g.opp)}`).join(" · "):"–"}</td>
         <td style="font-family:'JetBrains Mono';font-size:11px">${r.so} / ${esc(String(r.ip))} / ${(r.pK*100).toFixed(1)}%${(()=>{const t=pitcherNote(r);return t.length?`<div class="cell-note">${t.map(esc).join(" · ")}</div>`:"";})()}</td>
         ${(()=>{const ln=lineupNote(r,leagueK);return `<td style="font-family:'JetBrains Mono';font-size:11px;color:${r.oppK>=leagueK?'var(--green)':'var(--red)'}" title="opposing lineup K-rate${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%">${(r.oppK*100).toFixed(1)}% <span style="color:var(--ink-faint)">${r.oppK>=leagueK?"▲":"▼"}${(Math.abs(r.oppK-leagueK)*100).toFixed(1)}</span>${ln.favorable?' ✅':''}<div class="cell-note">${ln.tags.map(esc).join(" · ")}</div></td>`;})()}
         <td style="font-family:'JetBrains Mono';font-size:11px" title="${r.lgRank?esc(r.lgRank.lgName):""}">${r.lgRank?`<span class="pj">#${r.lgRank.mlbRank}</span> <span style="color:var(--ink-faint)">#${r.lgRank.lgRank} ${esc(lgAbbr(r.lgRank.lgName))}</span>`:"–"}</td>
@@ -1864,17 +1965,34 @@ function renderKResults(rows, leagueK){
         <td>${(poissonGE(r.proj,5)*100).toFixed(0)}%</td>
         <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%</td>
         <td>${(poissonGE(r.proj,7)*100).toFixed(0)}%</td>
-      </tr>`).join("")}</tbody>
+      </tr>
+      <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="11" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
-      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), scaled by batters/start and adjusted for park, temperature & recent workload${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg. Projection, not a guarantee.
+      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent momentum (win/loss streak + recent K-form)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg, or ⓘ for the math. Projection, not a guarantee.
     </div>
   </div>`;
-  out.querySelectorAll(".krank tbody tr").forEach(tr=>{
+  out.querySelectorAll(".krank tbody tr:not(.why-row)").forEach(tr=>{
     tr.addEventListener("click",()=>{
       const r=rows.find(x=>x.id==tr.dataset.pid);
       // line at the rounded projection .5 under; Kalshi odds for that target auto-fill
       addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts", line:String(Math.round(r.proj))});
+    });
+  });
+  // ⓘ → toggle the per-row "why this target?" breakdown (without adding a leg)
+  out.querySelectorAll(".info-btn").forEach(b=>{
+    b.addEventListener("click",(e)=>{
+      e.stopPropagation();
+      const panel=out.querySelector(`.why-row[data-why-row="${b.dataset.info}"]`);
+      if(panel) panel.style.display = panel.style.display==="none" ? "" : "none";
+    });
+  });
+  // "why?" on a suggested leg → toggle its explanation panel
+  out.querySelectorAll(".whybtn").forEach(b=>{
+    b.addEventListener("click",(e)=>{
+      e.stopPropagation();
+      const panel=out.querySelector(`[data-why-leg-panel="${b.dataset.whyLeg}"]`);
+      if(panel) panel.style.display = panel.style.display==="none" ? "" : "none";
     });
   });
   out.querySelectorAll(".legbtn").forEach(b=>{
@@ -1898,11 +2016,13 @@ function annotateK(rows){
     badge.textContent=`${r.proj.toFixed(1)} proj K`+(r.bullpen?" 🪣":r.thin?" ~":"");
     badge.title=(r.bullpen?"bullpen game / opener. ":r.thin?"thin sample (injured/call-up starter). ":"")+(ilBack?`back from IL ${r.ilBackDays}d ago${r.ilReason?" — "+r.ilReason:""}`:"");
     card.querySelector(".pname").after(badge);
-    // last-3-starts K (with opponents) + IL chips on the stat line
+    // last-5-starts K (with opponents) + IL chips on the stat line
     const stats=card.querySelector(".pstats");
     if(stats){
       stats.querySelectorAll(".st.dyn").forEach(x=>x.remove());
-      if(r.l3&&r.l3.length){ const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`L3 K <b>${r.l3.map(g=>`${g.k}${g.home?"v":"@"}${esc(g.opp)}`).join(" ")}</b>`; stats.appendChild(c); }
+      if(r.l5&&r.l5.length){ const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`L5 K <b>${r.l5.map(g=>`${g.k}${g.home?"v":"@"}${esc(g.opp)}`).join(" ")}</b>`; stats.appendChild(c); }
+      if(r.oppStreak && r.oppStreak.n>=3){ const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`Opp ${r.oppStreak.type==="W"?"🔥":"🧊"} <b>${r.oppStreak.type}${r.oppStreak.n}</b>`; stats.appendChild(c); }
+      if(r.vsOppLast){ const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`vs ${esc(r.oppAb)} <b>${r.vsOppLast.k}K</b>`; c.title=`last meeting ${fmtShort(r.vsOppLast.date)}`; stats.appendChild(c); }
       { const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`SO/IP <b>${r.so}/${esc(String(r.ip))}</b>`; stats.appendChild(c); }
       { const c=document.createElement("div"); c.className="st dyn"; c.innerHTML=`K% <b>${(r.pK*100).toFixed(1)}%</b>`; stats.appendChild(c); }
       if(r.lgRank){ const c=document.createElement("div"); c.className="st dyn"; c.title=r.lgRank.lgName; c.innerHTML=`MLB K <b>#${r.lgRank.mlbRank}</b>/${r.lgRank.mlbTotal} (#${r.lgRank.lgRank} ${esc(lgAbbr(r.lgRank.lgName))})`; stats.appendChild(c); }
