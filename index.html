@@ -1952,8 +1952,14 @@ document.getElementById("autoRefresh").addEventListener("change", e=>{
 });
 document.getElementById("gradeBtn").addEventListener("click", gradeAll);
 document.getElementById("oddsSettingsBtn").addEventListener("click", ()=>{
-  const el=document.getElementById("oddsSettings"); el.hidden=!el.hidden;
-  document.getElementById("oddsKey").value=getOddsKey();
+  const el=document.getElementById("oddsSettings");
+  el.hidden=!el.hidden;
+  if(!el.hidden){
+    const inp=document.getElementById("oddsKey");
+    inp.value=getOddsKey();
+    el.scrollIntoView({behavior:"smooth",block:"center"});
+    setTimeout(()=>inp.focus(),250);
+  }
 });
 document.getElementById("saveOddsKey").addEventListener("click", ()=>{
   const v=document.getElementById("oddsKey").value.trim();
