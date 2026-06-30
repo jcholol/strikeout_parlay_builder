@@ -148,6 +148,15 @@
   .scoreboard{
     display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:30px;
   }
+  /* small W–L record broken out by parlay leg count */
+  .legrec{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:-20px 2px 26px;font-family:"JetBrains Mono";font-size:10px;letter-spacing:.5px}
+  .legrec:empty{display:none}
+  .legrec .legrec-lab{color:var(--ink-faint);text-transform:uppercase;letter-spacing:1px}
+  .legrec .lr{color:var(--ink-dim)}
+  .legrec .lr b{color:var(--chalk);font-weight:700}
+  .legrec .lr i{font-style:normal;color:var(--ink-faint);margin-left:1px}
+  .legrec .lr.pos i{color:var(--green)}
+  .legrec .lr.neg i{color:var(--red)}
   .stat{
     background:linear-gradient(180deg,var(--panel),var(--bg-2));
     border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;
@@ -533,6 +542,7 @@
 
   <!-- SCOREBOARD -->
   <section class="scoreboard" id="scoreboard"></section>
+  <div class="legrec" id="legBreakdown"></div>
 
   <!-- TODAY'S SLATE (live MLB data) -->
   <section class="panel" style="margin-bottom:24px">
@@ -767,8 +777,34 @@ function computeStats(){
   return { wins, losses, winRate, wagered, profit, net, last3, streak, streakType:type, pending, pendingStake, roi };
 }
 
+/* settled W–L split out by parlay leg count (2 / 3 / 4 / 5+, plus 1 if any) */
+function legCountRecord(){
+  const settled = parlays.filter(p=>p.status==="won"||p.status==="lost");
+  const buckets={};
+  const keyFor = n => n<=1 ? "1" : n>=5 ? "5+" : String(n);
+  settled.forEach(p=>{
+    const k=keyFor(p.legs.length);
+    const b=buckets[k]||(buckets[k]={w:0,l:0});
+    if(p.status==="won") b.w++; else b.l++;
+  });
+  return ["1","2","3","4","5+"]
+    .filter(k=> k!=="1" || buckets["1"])               // hide the 1-leg bucket unless used
+    .map(k=>({ k, w:(buckets[k]?.w||0), l:(buckets[k]?.l||0) }));
+}
+function renderLegBreakdown(){
+  const el=document.getElementById("legBreakdown"); if(!el) return;
+  const recs=legCountRecord();
+  if(!recs.reduce((s,r)=>s+r.w+r.l,0)){ el.innerHTML=""; return; }  // nothing settled yet → hide
+  el.innerHTML=`<span class="legrec-lab">By leg count</span>`+recs.map(r=>{
+    const t=r.w+r.l, wr=t?Math.round(r.w/t*100):0;
+    const cls = !t ? "" : wr>=50 ? "pos" : "neg";
+    return `<span class="lr ${cls}"><b>${r.k==="5+"?"5+":r.k+"L"}</b> ${r.w}–${r.l}${t?` <i>${wr}%</i>`:""}</span>`;
+  }).join("");
+}
+
 /* ---------- Render: scoreboard ---------- */
 function renderScoreboard(){
+  renderLegBreakdown();
   const s = computeStats();
   const last3html = s.last3.length
     ? s.last3.map(r=>`<div class="pill ${r==='W'?'w':'l'}">${r}</div>`).join("")
