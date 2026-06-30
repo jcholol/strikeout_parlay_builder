@@ -1791,8 +1791,12 @@ async function analyzeK(opts={}){
         if(form && form.recentK!=null && oppSeasonK>0){
           const w=Math.min(0.5, form.recentPA/250);
           momentumF = 1 + w*(form.recentK/oppSeasonK - 1);             // recent vs the team's norm
-          if(form.streak.type==="W" && form.streak.n>=4) momentumF*=0.98;       // hot, confident bats
-          else if(form.streak.type==="L" && form.streak.n>=4) momentumF*=1.01;   // cold, pressing
+          // graduated streak nudge: 1-2 games is noise; past that each game adds weight, so a
+          // 10-game run weighs more than a 5-game run (no per-streak cap — the overall momentumF
+          // clamp below is the only rail). Hot win streak → fewer Ks; cold streak → a few more.
+          const sn=form.streak.n;
+          if(form.streak.type==="W" && sn>=3) momentumF*=(1 - (sn-2)*0.01);
+          else if(form.streak.type==="L" && sn>=3) momentumF*=(1 + (sn-2)*0.006);
           momentumF=Math.max(0.88, Math.min(1.10, momentumF));
         }
         // environmental adjustments: park, weather, workload, momentum
