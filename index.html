@@ -894,7 +894,12 @@ function renderBoard(){
       let progress;
       if(isLiveK){
         const cleared = l.liveK >= (+l.line);
-        progress = `<span class="livek${cleared?" cleared":""}"><span class="live-dot"></span>${l.liveK} K${lg.inning?` · ${half}${lg.inning}`:""}</span>${kPips(l.liveK, l.line)}`;
+        const det = [
+          lg.inning?`${half}${lg.inning}`:"",
+          l.liveIp!=null?`${l.liveIp} IP`:"",
+          l.livePitches!=null?`${l.livePitches} P`:""
+        ].filter(Boolean).join(" · ");
+        progress = `<span class="livek${cleared?" cleared":""}"><span class="live-dot"></span>${l.liveK} K${det?` · ${det}`:""}</span>${kPips(l.liveK, l.line)}`;
       } else {
         progress = l.actual!=null ? `<span class="actualk">→ ${esc(String(l.actual))}${l.market==="Strikeouts"?" K":""}</span>` : "";
       }
@@ -2224,13 +2229,15 @@ async function refreshLive(){
           liveGames[gp]={ state:"Live", inning:s.inning, inningState:s.inningState };
           legs.filter(l=>l.gamePk===gp).forEach(l=>{
             const pl=findPitcher(box, l.personId, l.pitcher);
-            const k=pl?.stats?.pitching?.strikeOuts;
-            l.liveK = (k==null? null : +k);
+            const ps=pl?.stats?.pitching;
+            l.liveK = (ps?.strikeOuts==null? null : +ps.strikeOuts);
+            l.liveIp = ps?.inningsPitched ?? null;                          // "6.1" = 6⅓
+            l.livePitches = ps?.numberOfPitches ?? ps?.pitchesThrown ?? null;
           });
         }catch(e){}
       }
       // a leg whose game is no longer live drops its transient live count (final grade takes over)
-      legs.forEach(l=>{ const s=smap[l.gamePk]; if(!s || s.state!=="Live"){ delete l.liveK; delete liveGames[l.gamePk]; } });
+      legs.forEach(l=>{ const s=smap[l.gamePk]; if(!s || s.state!=="Live"){ delete l.liveK; delete l.liveIp; delete l.livePitches; delete liveGames[l.gamePk]; } });
     }
     if(anyFinalPending) gradeAll({silent:true}).catch(()=>{});   // settle any game that just went Final
     renderBoard();
