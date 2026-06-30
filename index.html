@@ -309,6 +309,25 @@
     display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 18px;border-bottom:1px dashed var(--line);flex-wrap:wrap;
   }
   .ticket-top .meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .collapse-btn{
+    flex:none;width:24px;height:24px;display:flex;align-items:center;justify-content:center;
+    border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink-faint);
+    cursor:pointer;font-size:11px;line-height:1;transition:color .12s,border-color .12s,transform .12s;
+  }
+  .collapse-btn:hover{color:var(--chalk);border-color:var(--ink-faint)}
+  .collapse-btn .chev{transition:transform .15s}
+  .ticket.collapsed .collapse-btn .chev{transform:rotate(-90deg)}
+  .ticket.collapsed .ticket-legs,.ticket.collapsed .ticket-foot{display:none}
+  .ticket-collapsed-summary{display:none}
+  .ticket.collapsed .ticket-collapsed-summary{
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    padding:10px 18px;font-family:"JetBrains Mono";font-size:12px;
+  }
+  .ticket-collapsed-summary .cs-pitchers{color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ticket-collapsed-summary .cs-profit{flex:none;font-weight:800;font-variant-numeric:tabular-nums}
+  .ticket-collapsed-summary .cs-profit.green{color:var(--green)}
+  .ticket-collapsed-summary .cs-profit.red{color:var(--red)}
+  .ticket-collapsed-summary .cs-profit.amber{color:var(--amber)}
   .badge{
     font-family:"Oswald";font-weight:700;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;
     padding:4px 10px;border-radius:6px;border:1px solid;
@@ -700,6 +719,9 @@ let parlays = load();
 migrateLegOdds();
 let filter = "all";
 let draftLegs = [ newLeg() ];
+// collapsed ticket ids (view-only state, persisted so the board stays tidy across reloads)
+const collapsed = new Set(JSON.parse(localStorage.getItem("bullpen.collapsed")||"[]"));
+function saveCollapsed(){ localStorage.setItem("bullpen.collapsed", JSON.stringify([...collapsed])); }
 
 function newLeg(){ return { pitcher:"", market:"Strikeouts", line:"", side:"Over", odds:"", personId:null, gamePk:null }; }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -959,14 +981,21 @@ function renderBoard(){
     const profitLabel = p.status==="pending" ? "Potential" : "Result";
     const profitShown = p.status==="pending" ? (p.payout - p.wager) : profitVal;
 
+    const isCollapsed = collapsed.has(p.id);
+    const csPitchers = p.legs.map(l=>esc(l.pitcher||"—")).join(" · ");
     return `
-    <div class="ticket ${p.status}">
+    <div class="ticket ${p.status}${isCollapsed?" collapsed":""}">
       <div class="ticket-top">
         <div class="meta">
+          <button class="collapse-btn" data-collapse data-id="${p.id}" title="${isCollapsed?"Expand":"Collapse"} this ticket" aria-label="${isCollapsed?"Expand":"Collapse"} ticket"><span class="chev">▾</span></button>
           <span class="badge ${p.status}">${p.status}</span>
           <span class="legcount">${p.legs.length}-Leg Parlay</span>
         </div>
         <span class="date">${fmtDate(p.date)}</span>
+      </div>
+      <div class="ticket-collapsed-summary">
+        <span class="cs-pitchers">${csPitchers}</span>
+        <span class="cs-profit ${profitClass}">${(profitShown>=0?"+":"")+money(profitShown).replace("-","")}</span>
       </div>
       <div class="ticket-legs">${legs}</div>
       <div class="ticket-foot">
@@ -995,6 +1024,16 @@ function renderBoard(){
   board.querySelectorAll("[data-editpay]").forEach(el=>{
     el.addEventListener("click", ()=>startEditPayout(el));
   });
+  board.querySelectorAll("[data-collapse]").forEach(b=>{
+    b.addEventListener("click", ()=>toggleCollapse(b.dataset.id));
+  });
+}
+
+// Collapse / expand a ticket down to a one-line summary (view-only, persisted).
+function toggleCollapse(id){
+  if(collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+  saveCollapsed();
+  renderBoard();
 }
 
 // click-to-edit the actual payout (your real Kalshi fill differs from the mid-price)
