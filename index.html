@@ -457,6 +457,11 @@
   .pstats .st.dyn b{color:var(--green)}
   .pstats .st.dyn.il{color:#7fd4ff;border-color:#2d6a8a;background:rgba(127,212,255,.08)}
   .pstats .st.dyn.out{color:#ffb0b0;border-color:var(--red-dim);background:rgba(255,87,99,.07)}
+  /* opponent-lineup-posted flag (the K market's key catalyst) */
+  .lineup-flag{display:inline-flex;align-items:center;gap:4px;font-family:"JetBrains Mono";font-size:9px;letter-spacing:.5px;border-radius:5px;padding:2px 7px;margin:0 0 8px}
+  .lineup-flag.in{color:var(--green);border:1px solid var(--green);background:rgba(80,200,120,.10)}
+  .lineup-flag.pending{color:var(--ink-faint);border:1px solid var(--line-soft);background:var(--bg-2)}
+  .lineup-flag .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);display:inline-block}
   .padd{display:flex;gap:6px;flex-wrap:wrap}
   .odds-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:7px}
   .odds-chip{font-family:"JetBrains Mono";font-size:10px;background:rgba(255,182,39,.08);border:1px solid var(--amber-dim);color:var(--amber);border-radius:6px;padding:3px 7px;cursor:pointer;transition:.15s}
@@ -1350,6 +1355,7 @@ async function loadSlate(){
 
     // live odds: Kalshi first (free, matches where you bet), then optionally The Odds API
     loadKalshiOdds(games).catch(()=>{});
+    refreshLineupFlags().catch(()=>{});   // flag whose opponent lineup is already posted
   }catch(e){
     setSlateStatus("Couldn't reach MLB data ("+e.message+")","err");
   }
@@ -2103,6 +2109,42 @@ function annotateK(rows){
   });
 }
 
+/* ---- opponent-lineup-posted flag on the slate ----
+   For a strikeout bet on pitcher P, the catalyst is the OPPOSING batting order being set.
+   Most useful for the earliest games — later games' lineups won't post until after the
+   early games are underway, so those simply read "pending". */
+function setLineupFlag(card, state){
+  card.querySelectorAll(".lineup-flag").forEach(x=>x.remove());
+  if(!state) return;
+  const el=document.createElement("div");
+  el.className="lineup-flag "+state;
+  el.innerHTML = state==="in" ? `<span class="live-dot"></span>Lineup in` : `○ Lineup pending`;
+  el.title = state==="in"
+    ? "opposing batting order is posted — the strikeout market's key catalyst has hit; worth a look"
+    : "opposing batting order not posted yet (usually drops ~3–4h before first pitch)";
+  const stats=card.querySelector(".pstats");
+  if(stats) stats.before(el); else card.querySelector(".ptop")?.after(el);
+}
+async function refreshLineupFlags(){
+  if(!slateState || !slateState.games?.length) return;
+  for(const g of slateState.games){
+    const started = g.status?.abstractGameState && g.status.abstractGameState!=="Preview";
+    let posted={};
+    try{
+      const b=await getBox(g.gamePk, true);   // fresh box: pick up a lineup the moment it posts
+      ["away","home"].forEach(s=>{ const t=b.teams?.[s]; if(t?.team) posted[t.team.id]=(t.battingOrder||[]).length>=9; });
+    }catch(e){ continue; }
+    ["away","home"].forEach(side=>{
+      const me=g.teams[side], opp=g.teams[side==="away"?"home":"away"];
+      const pp=me.probablePitcher; if(!pp) return;
+      const card=document.querySelector(`.pcard[data-pid="${pp.id}"][data-gamepk="${g.gamePk}"]`);
+      if(!card) return;
+      setLineupFlag(card, started ? null : (posted[opp.team.id] ? "in" : "pending"));  // moot once underway
+    });
+  }
+}
+function maybeRefreshLineups(){ if(slateState && slateState.games?.length) refreshLineupFlags().catch(()=>{}); }
+
 /* ============================================================
    AUTO-GRADE  (settle pending tickets from final boxscores)
    ============================================================ */
@@ -2226,8 +2268,8 @@ function maybeRefreshK(){
 function startAutoGrade(){
   clearInterval(autoGradeTimer);
   setTimeout(()=>autoSettle(true), 4000);                            // shortly after load / refresh
-  autoGradeTimer=setInterval(()=>{ autoSettle(true); maybeRefreshK(); }, 150000);   // periodic while open
-  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); liveTick(); };
+  autoGradeTimer=setInterval(()=>{ autoSettle(true); maybeRefreshK(); maybeRefreshLineups(); }, 150000);   // periodic while open
+  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); maybeRefreshLineups(); liveTick(); };
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) onReturn(); }); // return to tab
   window.addEventListener("focus", onReturn);
 }
