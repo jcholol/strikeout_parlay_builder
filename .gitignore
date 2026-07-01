@@ -5,3 +5,10 @@ node_modules/
 .DS_Store
 Thumbs.db
 bullpen.html
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
