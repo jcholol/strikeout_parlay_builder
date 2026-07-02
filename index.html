@@ -1637,6 +1637,50 @@ async function getTeamHit(teamId, season){
 /* opponent momentum: recent K-form + win/loss streak from the team's hitting game log.
    "Hot swinging" teams (striking out less than their season norm, or riding a win streak)
    make a high-K arm a softer leg — baseball runs on momentum. */
+/* ---- Baseball Savant (Statcast) Tier-1 "stuff" metrics: whiff% + chase% ----
+   Savant serves open CORS (access-control-allow-origin: *), so the browser hits it directly —
+   no proxy. One cached custom-leaderboard call each for pitchers & batters covers the whole
+   league; player_id is the same MLBAM id as statsapi, so the join is direct. whiff% (whiffs per
+   swing) is the fast-stabilizing lead indicator; on 2026 data K% ≈ 0.88 × whiff% for both
+   pitchers (r=.80) and batters (r=.88), so we regress a noisy K rate toward its whiff-implied
+   value — de-noising rookies, IL returns and hot streaks the way the framework's Tier-1 asks. */
+const savantCache={};   // season -> { pit:{id:whiff%}, bat:{id:{whiff,chase,k,pa}} }
+const SAVANT="https://baseballsavant.mlb.com/leaderboard/custom";
+const WHIFF_TO_K=0.88;  // fitted 2026 slope: K rate ≈ 0.88 × whiff rate (intercept ≈ 0)
+const WHIFF_K0=130;     // regression weight (in BF/PA) pulling a small sample toward whiff-implied K
+function parseCSV(text){
+  const rows=[]; let field="", row=[], q=false;
+  for(let i=0;i<text.length;i++){ const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){ field+='"'; i++; } else q=false; } else field+=c; }
+    else if(c==='"') q=true;
+    else if(c===',') { row.push(field); field=""; }
+    else if(c==='\n'){ row.push(field); rows.push(row); row=[]; field=""; }
+    else if(c!=='\r') field+=c;
+  }
+  if(field.length||row.length){ row.push(field); rows.push(row); }
+  return rows;
+}
+async function loadSavant(season){
+  if(savantCache[season]) return savantCache[season];
+  const out={pit:{}, bat:{}};
+  try{
+    const pURL=`${SAVANT}?year=${season}&type=pitcher&filter=&min=1&selections=player_id,whiff_percent&csv=true`;
+    const bURL=`${SAVANT}?year=${season}&type=batter&filter=&min=1&selections=player_id,pa,k_percent,whiff_percent,oz_swing_percent&csv=true`;
+    const [pt,bt]=await Promise.all([fetch(pURL).then(r=>r.text()), fetch(bURL).then(r=>r.text())]);
+    const pr=parseCSV(pt), ph=pr[0]||[]; const pId=ph.indexOf("player_id"), pW=ph.indexOf("whiff_percent");
+    pr.slice(1).forEach(r=>{ const id=+r[pId], w=parseFloat(r[pW]); if(id && w>0) out.pit[id]=w; });
+    const br=parseCSV(bt), bh=br[0]||[]; const bId=bh.indexOf("player_id"), bW=bh.indexOf("whiff_percent"), bC=bh.indexOf("oz_swing_percent"), bK=bh.indexOf("k_percent"), bP=bh.indexOf("pa");
+    br.slice(1).forEach(r=>{ const id=+r[bId]; if(!id) return; out.bat[id]={ whiff:parseFloat(r[bW])||null, chase:parseFloat(r[bC])||null, k:parseFloat(r[bK])||null, pa:parseFloat(r[bP])||0 }; });
+  }catch(e){}
+  return savantCache[season]=out;
+}
+// blend a measured K rate (over n batters/BF) toward its whiff-implied value; small samples lean
+// on the faster-stabilizing whiff signal, full-season samples keep their real rate.
+function whiffBlend(kRate, n, whiffPct){
+  if(whiffPct==null || !(whiffPct>0)) return { k:kRate, kFromWhiff:null };
+  const kFromWhiff=WHIFF_TO_K*(whiffPct/100);
+  return { k:(n*kRate + WHIFF_K0*kFromWhiff)/(n+WHIFF_K0), kFromWhiff };
+}
 async function getTeamForm(teamId, season, asOf){
   const k=season+":"+teamId+":"+asOf;
   if(k in teamFormCache) return teamFormCache[k];
@@ -1793,7 +1837,7 @@ async function getGameContext(gamePk){
       if(order.length>=9){
         let so=0,pa=0;
         order.forEach(id=>{ const bb=t.players?.["ID"+id]?.seasonStats?.batting; if(bb){ so+=+bb.strikeOuts||0; pa+=+bb.plateAppearances||0; } });
-        if(pa>0) ctx.lineups[t.team.id]={so,pa};
+        if(pa>0) ctx.lineups[t.team.id]={so,pa,order};   // keep the 9 ids for Savant whiff/chase lookup
       }
     });
   }catch(e){}
@@ -1853,12 +1897,18 @@ function poissonGE(lambda, n){ // P(X >= n)
   for(let k=0;k<n;k++){ cdf+=term; term*=lambda/(k+1); }
   return Math.max(0, Math.min(1, 1-cdf));
 }
-function projectK(pStat, oppHit, leagueK){
+function projectK(pStat, oppHit, leagueK, pWhiff, oppWhiff, oppN){
   if(!pStat || !oppHit) return null;
   const bf=+pStat.battersFaced, so=+pStat.strikeOuts, gs=+pStat.gamesStarted||0, gp=+pStat.gamesPlayed||gs;
   if(!bf || !so) return null;
-  const pK = so/bf;                                   // pitcher K rate / batter
-  const oppK = (+oppHit.strikeOuts)/(+oppHit.plateAppearances); // lineup K rate
+  const pKraw = so/bf;                                          // pitcher outcome K rate / batter
+  const oppKraw = (+oppHit.strikeOuts)/(+oppHit.plateAppearances); // lineup outcome K rate
+  // Tier-1 stabilization: regress each outcome K rate toward its whiff-implied value, weighted by
+  // sample. Full-season rates barely move; small samples (rookies, IL returns, a posted 9-man
+  // lineup) lean on the faster-stabilizing whiff signal.
+  const pb = whiffBlend(pKraw, bf, pWhiff);
+  const ob = whiffBlend(oppKraw, oppN>1?oppN:600, oppWhiff);
+  const pK = pb.k, oppK = ob.k;
   // log5: combine two rates relative to league
   const num = (pK*oppK/leagueK);
   const den = num + ((1-pK)*(1-oppK)/(1-leagueK));
@@ -1874,7 +1924,8 @@ function projectK(pStat, oppHit, leagueK){
   }
   bfPerStart = Math.max(12, Math.min(27, bfPerStart));// clamp to a realistic start length
   let proj = Math.min(rate * bfPerStart, 12.5);       // hard ceiling — no human throws a 28-K game
-  return { proj, rate, pK, oppK, bfPerStart, bullpen, thin, gs, starterShare };
+  return { proj, rate, pK, oppK, pKraw, oppKraw, pWhiff, oppWhiff,
+           pKfromWhiff:pb.kFromWhiff, oppKfromWhiff:ob.kFromWhiff, bfPerStart, bullpen, thin, gs, starterShare };
 }
 
 async function analyzeK(opts={}){
@@ -1891,6 +1942,7 @@ async function analyzeK(opts={}){
     const leagueK=await getLeagueK(season);
     const info=await getTeamInfo();
     const lgRanks=await getLeagueRanks(season);
+    const savant=await loadSavant(season);   // Statcast whiff% / chase% (Tier-1 stuff)
     const rows=[];
     for(const g of games){
       for(const side of ["away","home"]){
@@ -1906,6 +1958,7 @@ async function analyzeK(opts={}){
         // opponent K rate: prefer the ACTUAL posted lineup (skewed for handedness), else team-season
         const lu=ctx.lineups[opp.team.id];
         let oppHit=splitHit||overallHit, lineupUsed=false, lineupK=null;
+        let oppN = +oppHit.plateAppearances || 600, oppWhiff=null, oppChase=null;
         if(lu && lu.pa>120){
           const overallK=overallHit?(+overallHit.strikeOuts)/(+overallHit.plateAppearances):null;
           const vsHandK=splitHit?(+splitHit.strikeOuts)/(+splitHit.plateAppearances):overallK;
@@ -1913,9 +1966,18 @@ async function analyzeK(opts={}){
           lineupK=lu.so/lu.pa;
           const adjK=Math.max(0.10, Math.min(0.40, lineupK*handRatio));
           oppHit={strikeOuts:adjK, plateAppearances:1};
+          oppN=lu.pa;                                               // real PA weight for the whiff blend
           lineupUsed=true;
+          // aggregate the posted 9's Statcast whiff% + chase% (PA-weighted) from Savant
+          if(lu.order){
+            let wS=0,wN=0,cS=0,cN=0;
+            lu.order.forEach(id=>{ const s=savant.bat[id]; if(!s) return; const wt=s.pa||1;
+              if(s.whiff!=null){ wS+=s.whiff*wt; wN+=wt; } if(s.chase!=null){ cS+=s.chase*wt; cN+=wt; } });
+            if(wN) oppWhiff=wS/wN; if(cN) oppChase=cS/cN;
+          }
         }
-        const m=projectK(pStat, oppHit, leagueK);
+        const pWhiff = savant.pit[pp.id] ?? null;
+        const m=projectK(pStat, oppHit, leagueK, pWhiff, oppWhiff, oppN);
         if(!m) continue;
         const back=await getPlayerIL(pp.id, season, slateState.date);
         const ilBackDays = back ? back.backDays : null;
@@ -1963,7 +2025,7 @@ async function analyzeK(opts={}){
           oppRecord: opp.leagueRecord ? `${opp.leagueRecord.wins}-${opp.leagueRecord.losses}` : "",
           oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
           venue: g.venue?.name || "",
-          hand, oppSplit:!!splitHit, lineupUsed, lineupK,
+          hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase,
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
           momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
           oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
@@ -1993,6 +2055,8 @@ function ipToNum(ip){
 function pitcherNote(r){
   const tags=[];
   if(r.hand) tags.push(r.hand==="L"?"LHP":"RHP");
+  // Tier-1 stuff first: whiff% (whiffs/swing). League ~25%; <22% = soft stuff (regression risk).
+  if(r.pWhiff!=null) tags.push(`${r.pWhiff.toFixed(0)}% whiff${r.pWhiff>=32?" 🔥":r.pWhiff<22?" ⚠️soft":""}`);
   const ipN=ipToNum(r.ip);
   if(ipN>=10 && r.so){ const k9=r.so/ipN*9; tags.push(`${k9>=11?Math.round(k9)+"+":k9.toFixed(1)} K/9`); }
   if(r.lgRank){
@@ -2027,6 +2091,7 @@ function lineupNote(r, leagueK){
     const d=(r.oppRecentK/oppBase-1)*100;   // recent K-rate vs the team's season norm
     if(Math.abs(d)>=4){ tags.push(`K${d<0?"↓":"↑"} ${Math.abs(d).toFixed(0)}% L${r.oppWL?(r.oppWL.w+r.oppWL.l):"10"}`); if(d<=-6) hot=true; }
   }
+  if(r.oppChase!=null) tags.push(`${r.oppChase.toFixed(0)}% chase${r.oppChase>=32?" 🎣":""}`);   // chase-happy lineups feed Ks
   if(r.venue) tags.push(`${r.venue}${r.parkF&&Math.abs(r.parkF-1)>=0.02?` (${r.parkF>1?"+":""}${((r.parkF-1)*100).toFixed(0)}% K)`:""}`);
   if(r.temp!=null) tags.push(`${r.temp}°${r.weather&&!/^\d+\s*degree/i.test(r.weather)?" "+r.weather.replace(/^\d+\s*degrees?,?\s*/i,""):""}`);
   return { tags:tags.slice(0,6), favorable: diff>=0.7 && !hot, hot };
@@ -2151,6 +2216,11 @@ function explainTarget(r, leagueK){
   if(Math.abs((r.momentumF||1)-1)>=0.005) mults.push(`early-exit ${pctDelta(r.momentumF)}`);
   L.push(`Proj ${(r.projBase!=null?r.projBase:r.proj).toFixed(1)} → <b>${r.proj.toFixed(1)} K</b>${mults.length?` (${mults.join(", ")})`:""}`);
   L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`);
+  // Tier-1: show where the whiff signal regressed a noisy outcome K rate
+  if(r.pWhiff!=null && r.pKraw!=null && Math.abs(r.pK-r.pKraw)>=0.005)
+    L.push(`Stuff: ${r.pWhiff.toFixed(0)}% whiff → K ${(r.pKraw*100).toFixed(1)}% regressed to <b>${(r.pK*100).toFixed(1)}%</b> (whiff-implied ${(r.pKfromWhiff*100).toFixed(1)}%, small sample)`);
+  else if(r.pWhiff!=null)
+    L.push(`Stuff: <b>${r.pWhiff.toFixed(0)}% whiff</b>${r.pWhiff<22?" — soft, regression risk":r.pWhiff>=32?" — elite":""}${r.oppChase!=null?` · lineup chase ${r.oppChase.toFixed(0)}%`:""}`);
   if(r.oppStreak) L.push(`Opp momentum: ${r.oppStreak.type}${r.oppStreak.n} streak${r.oppWL?`, ${r.oppWL.w}-${r.oppWL.l} last ${r.oppWL.w+r.oppWL.l}`:""}${r.oppRecentK!=null?`, recent K ${(r.oppRecentK*100).toFixed(1)}% vs ${((r.oppSeasonK||r.oppK)*100).toFixed(1)}% season`:""}`);
   if(r.vsOppLast) L.push(`Last time vs ${esc(r.oppAb)}: <b>${r.vsOppLast.k} K</b> (${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""})`);
   return `<div style="font-family:'JetBrains Mono';font-size:10px;line-height:1.7;color:var(--ink-dim);padding:8px 10px;background:rgba(127,127,127,.08);border-radius:6px;margin-top:4px">${L.map(x=>`<div>${x}</div>`).join("")}</div>`;
@@ -2208,7 +2278,7 @@ function renderKResults(rows, leagueK){
       <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="11" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
-      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
+      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
     </div>
   </div>`;
   out.querySelectorAll(".krank tbody tr:not(.why-row)").forEach(tr=>{
