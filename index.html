@@ -429,6 +429,16 @@
   .kpanel .top .proj{margin-left:auto;text-align:right}
   .kpanel .top .proj .big{font-family:"JetBrains Mono";font-weight:800;font-size:28px;color:var(--amber);line-height:1}
   .kpanel .top .proj .lab{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;color:var(--ink-faint);text-transform:uppercase}
+  /* edge board — every arm ranked by model-vs-market gap */
+  .edgeboard{margin:4px 0 14px}
+  .eb-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:7px}
+  .eb-title{font-family:"Oswald";font-weight:700;font-size:15px;letter-spacing:1px;color:var(--chalk);text-transform:uppercase}
+  .eb-sub{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint)}
+  .ebtable{width:100%;border-collapse:collapse}
+  .ebtable th{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1px;color:var(--ink-faint);text-transform:uppercase;text-align:center;padding:5px 6px;border-bottom:1px solid var(--line)}
+  .ebtable td{text-align:center;padding:6px;font-family:"JetBrains Mono";font-size:12px;border-bottom:1px solid rgba(127,127,127,.08);color:var(--chalk)}
+  .ebtable tbody tr{cursor:pointer;transition:background .1s}
+  .ebtable tbody tr:hover{background:rgba(255,182,39,.08)}
   .krec{background:rgba(255,182,39,.07);border:1px solid var(--amber-dim);border-radius:10px;padding:11px 13px;margin-bottom:12px}
   .krec-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
   .krec-title{font-family:"Oswald";font-weight:700;font-size:14px;letter-spacing:.8px;color:var(--amber);text-transform:uppercase}
@@ -2225,6 +2235,37 @@ function explainTarget(r, leagueK){
   if(r.vsOppLast) L.push(`Last time vs ${esc(r.oppAb)}: <b>${r.vsOppLast.k} K</b> (${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""})`);
   return `<div style="font-family:'JetBrains Mono';font-size:10px;line-height:1.7;color:var(--ink-dim);padding:8px 10px;background:rgba(127,127,127,.08);border-radius:6px;margin-top:4px">${L.map(x=>`<div>${x}</div>`).join("")}</div>`;
 }
+/* Edge board: every eligible arm at its best line, ranked by model-vs-market gap. This is the
+   pick-list — the model finds the edges, you choose off the live Kalshi prices. */
+function edgeBoardHTML(rows){
+  const cands = rows.filter(r=>!r.bullpen && r.proj>=3).map(r=>({r, c:candFromRow(r)}));
+  cands.sort((a,b)=>{
+    const ae=a.c.edge, be=b.c.edge;
+    if(ae!=null && be!=null) return be-ae;      // both priced → biggest edge first
+    if(ae!=null) return -1;                      // priced arms above unpriced
+    if(be!=null) return 1;
+    return b.c.p-a.c.p;                          // no prices → fall back to model confidence
+  });
+  const anyPriced=cands.some(x=>x.c.edge!=null);
+  return `
+  <div class="edgeboard">
+    <div class="eb-head"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`model prob vs live Kalshi mid — biggest gaps up top · edge ≥ ${(EV_MARGIN*100)|0} pts is a real play`:"no live Kalshi prices yet — showing model probs; edge fills in when books open"}</span></div>
+    <table class="ebtable">
+      <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="model's best line: most model-vs-market edge that still clears the 64% floor">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
+      <tbody>${cands.map(({r,c})=>{
+        const eColor = c.edge==null?"var(--ink-faint)":c.edge>=EV_MARGIN?"var(--green)":c.edge>=0?"var(--amber)":"var(--red)";
+        return `<tr data-eb-pid="${r.id}" data-eb-game="${r.gamePk}" data-eb-name="${esc(r.name)}" data-eb-line="${c.target}" title="click to add ${esc(r.name)} ${c.target}+ K to the builder">
+          <td style="text-align:left">${esc(r.name)}${c.hot?' <span style="color:var(--amber);font-size:9px" title="early-exit risk">⚠️</span>':''}${r.pWhiff!=null?` <span style="color:var(--ink-faint);font-size:9px" title="whiff%">${r.pWhiff.toFixed(0)}%w</span>`:''}</td>
+          <td style="text-align:left;color:var(--ink-dim)">${esc(r.team)} v ${esc(r.oppAb)}</td>
+          <td class="pj">${c.target}+</td>
+          <td>${(c.p*100).toFixed(0)}%</td>
+          <td>${c.pMarket!=null?(c.pMarket*100).toFixed(0)+"%":'<span style="color:var(--ink-faint)">—</span>'}</td>
+          <td style="font-weight:800;color:${eColor}">${c.edge!=null?`${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)}`:'<span style="color:var(--ink-faint)">n/a</span>'}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>
+  </div>`;
+}
 function renderKResults(rows, leagueK){
   lastK={rows, leagueK}; kShown=true;
   const top=rows[0];
@@ -2260,6 +2301,7 @@ function renderKResults(rows, leagueK){
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}
     </div>
+    ${edgeBoardHTML(rows)}
     <table class="krank">
       <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th title="strikeouts in his last up-to-5 starts (most recent last)">L5 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th title="MLB strikeout rank${mlbTotal?` among ${mlbTotal} qualified pitchers`:""}">K Rk${mlbTotal?` <span style="color:var(--ink-faint)">/${mlbTotal}</span>`:""}</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
       <tbody>${rows.map((r,i)=>`<tr data-pid="${r.id}" data-game="${r.gamePk}" data-name="${esc(r.name)}">
@@ -2281,6 +2323,11 @@ function renderKResults(rows, leagueK){
       log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
     </div>
   </div>`;
+  out.querySelectorAll(".ebtable tbody tr").forEach(tr=>{
+    tr.addEventListener("click",()=>{
+      addLegFromSlate({pitcher:tr.dataset.ebName, personId:+tr.dataset.ebPid, gamePk:+tr.dataset.ebGame, market:"Strikeouts", line:tr.dataset.ebLine});
+    });
+  });
   out.querySelectorAll(".krank tbody tr:not(.why-row)").forEach(tr=>{
     tr.addEventListener("click",()=>{
       const r=rows.find(x=>x.id==tr.dataset.pid);
