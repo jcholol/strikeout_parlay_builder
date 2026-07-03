@@ -2445,16 +2445,26 @@ function pctDelta(f){ if(f==null) return "0%"; const d=(f-1)*100; if(Math.abs(d)
 /* the clickable "why N+?" breakdown — Poisson ladder + the floor rule + every factor that
    built the projection, so a target is never a black box. */
 function explainTarget(r, leagueK){
+  // Use the SAME candidate the Suggested Parlay & Edge Board use, so the line + STRONG/soft verdict
+  // here can never contradict the leg tag. In EV mode "strong" means a real edge vs the Kalshi
+  // price (≥EV_MARGIN); with no live price it falls back to the ≥65% confidence rule.
+  const c = candFromRow(r);
+  const priced = c.edge!=null;
+  const chosen = c.p>=0.64 ? c.target : null;
+  const strong = c.strong;
   const ladder=[5,6,7,8].map(t=>({t, p:poissonGE(r.proj,t)}));
-  let chosen=null; for(let t=5;t<=9;t++){ if(poissonGE(r.proj,t)>=0.64) chosen=t; else break; }
   const nextT=chosen?chosen+1:5, nextP=poissonGE(r.proj,nextT);
-  const strong = chosen && poissonGE(r.proj, chosen)>=0.65 && !oppHot(r);
   const L=[];
-  L.push(`<b>Why ${chosen?chosen+"+":"under 5"} K?</b> We bet the highest line still ≥64% (our confidence floor).`);
+  L.push(`<b>Why ${chosen?chosen+"+":"under 5"} K?</b> ${priced?`We take the line with the most edge over the Kalshi price that still clears our 64% floor.`:`We bet the highest line still ≥64% (our confidence floor).`}`);
   L.push(`Ladder: ${ladder.map(x=>`${x.t}+ <b>${(x.p*100).toFixed(0)}%</b>`).join(" · ")}`);
-  if(chosen) L.push(`${chosen}+ clears at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}%; ${nextT}+ is only ${(nextP*100).toFixed(0)}% — below the floor, so we don't stretch for it.`);
+  if(chosen && priced) L.push(`${chosen}+ hits at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}% and carries the most edge among lines still ≥64%.`);
+  else if(chosen) L.push(`${chosen}+ clears at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}%; ${nextT}+ is only ${(nextP*100).toFixed(0)}% — below the floor, so we don't stretch for it.`);
   else L.push(`Even 5+ sits under the 64% floor — not a play.`);
-  L.push(`Verdict: <b style="color:${strong?'var(--green)':'var(--amber)'}">${strong?'STRONG':'soft'}</b>${oppHot(r)?` · early-exit risk${r.oppStreak&&r.oppStreak.type==="W"&&r.oppStreak.n>=4?` (W${r.oppStreak.n})`:""}${r.momentumF!=null&&r.momentumF<0.97?`, hot bats may shorten the outing`:""}`:''}`);
+  if(priced) L.push(`Market: model <b>${(c.p*100).toFixed(0)}%</b> vs Kalshi <b>${(c.pMarket*100).toFixed(0)}%</b> → edge <b style="color:${c.edge>=EV_MARGIN?'var(--green)':c.edge>=0?'var(--amber)':'var(--red)'}">${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts</b> (needs ≥${(EV_MARGIN*100)|0} to be strong).`);
+  const softWhy = !strong ? (priced
+      ? (c.edge<EV_MARGIN ? `edge under the ${(EV_MARGIN*100)|0}-pt bar — market prices him about right` : ``)
+      : (c.p<0.65 ? `under the 65% confidence bar` : ``)) : ``;
+  L.push(`Verdict: <b style="color:${strong?'var(--green)':'var(--amber)'}">${strong?'STRONG':'soft'}</b>${softWhy?` — ${softWhy}`:''}${oppHot(r)?` · early-exit risk${r.oppStreak&&r.oppStreak.type==="W"&&r.oppStreak.n>=4?` (W${r.oppStreak.n})`:""}${r.momentumF!=null&&r.momentumF<0.97?`, hot bats may shorten the outing`:""}`:''}`);
   const mults=[];
   if(Math.abs((r.parkF||1)-1)>=0.005) mults.push(`park ${pctDelta(r.parkF)}`);
   if(Math.abs((r.weatherF||1)-1)>=0.005) mults.push(`weather ${pctDelta(r.weatherF)}`);
