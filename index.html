@@ -383,6 +383,17 @@
   .ticket-foot .n .v.editpay:hover,.ticket-foot .n .v.editwager:hover{color:var(--amber);border-bottom-color:var(--amber)}
   .ticket-foot .n .v .edited{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);margin-left:5px}
   .pay-input{width:96px;font-family:"JetBrains Mono";font-weight:800;font-size:16px;padding:2px 6px;border:1px solid var(--amber-dim);border-radius:6px;background:var(--bg);color:var(--chalk)}
+  .ticket-note{
+    padding:8px 18px;font-family:"Barlow Condensed";font-size:14px;letter-spacing:.3px;
+    color:var(--ink-dim);cursor:pointer;display:flex;align-items:center;gap:7px;transition:color .12s;
+    border-top:1px dashed var(--line,rgba(255,255,255,.06));
+  }
+  .ticket-note:hover{color:var(--amber)}
+  .ticket-note.empty{color:var(--ink-faint);font-style:italic}
+  .ticket-note .note-ico{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);flex:none}
+  .ticket-note:hover .note-ico{color:var(--amber)}
+  .ticket.collapsed .ticket-note{display:none}
+  .note-input{width:100%;font-family:"Barlow Condensed";font-size:14px;padding:3px 8px;border:1px solid var(--amber-dim);border-radius:6px;background:var(--bg);color:var(--chalk)}
   .ticket-actions{display:flex;gap:7px;flex-wrap:wrap}
 
   .empty{
@@ -628,8 +639,8 @@
             <input type="number" id="wager" min="0" step="0.01" placeholder="25.00" />
           </label>
           <label class="fld" style="margin-bottom:0">
-            <span>To Win ($)</span>
-            <input type="number" id="toWin" min="0" step="0.01" placeholder="50.00" />
+            <span>Payout ($)</span>
+            <input type="number" id="payout" min="0" step="0.01" placeholder="75.00" title="Total returned if it hits. Auto-fills from odds; type your own for a manual entry." />
           </label>
           <label class="fld" style="margin-bottom:0">
             <span>Date</span>
@@ -637,7 +648,12 @@
           </label>
         </div>
 
-        <div class="ticket-summary">
+        <label class="fld" style="margin-top:10px;margin-bottom:0">
+          <span>Note <span style="color:var(--ink-faint);text-transform:none;letter-spacing:0">(optional)</span></span>
+          <input type="text" id="betNote" maxlength="140" placeholder="e.g. late add, book promo, hunch play…" />
+        </label>
+
+        <div class="ticket-summary" style="margin-top:14px">
           <div class="ts"><div class="k">Combined Odds</div><div class="v amber" id="sumOdds">—</div></div>
           <div class="ts"><div class="k">To Win (Profit)</div><div class="v green" id="sumProfit">$0.00</div></div>
           <div class="ts"><div class="k">Total Payout</div><div class="v" id="sumPayout">$0.00</div></div>
@@ -733,6 +749,9 @@ let parlays = load();
 migrateLegOdds();
 let filter = "all";
 let draftLegs = [ newLeg() ];
+// true once the user has typed into the Payout field — makes their number the source of
+// truth (overrides the odds-derived payout), which is what manual/after-the-fact entry needs.
+let payoutTouched = false;
 // collapsed ticket ids (view-only state, persisted so the board stays tidy across reloads)
 const collapsed = new Set(JSON.parse(localStorage.getItem("bullpen.collapsed")||"[]"));
 function saveCollapsed(){ localStorage.setItem("bullpen.collapsed", JSON.stringify([...collapsed])); }
@@ -913,22 +932,26 @@ function renderLegs(){
 function renderSummary(){
   const decFromLegs = combinedDecimal(draftLegs);
   const wager = +document.getElementById("wager").value || 0;
-  const toWinEl = document.getElementById("toWin");
-  const editingToWin = document.activeElement === toWinEl;
+  const payoutEl = document.getElementById("payout");
+  const editingPayout = document.activeElement === payoutEl;
 
   let dec, payout, profit;
-  if(decFromLegs){
-    // odds are on the legs — derive To Win from them and keep that field synced
+  if(payoutTouched && payoutEl && payoutEl.value!==""){
+    // the user typed a payout — treat it as the source of truth (manual / after-the-fact entry)
+    payout = +payoutEl.value || 0;
+    profit = payout - wager;
+    dec = wager>0 ? payout/wager : 0;
+  } else if(decFromLegs){
+    // odds are on the legs — derive the payout from them and keep that field synced
     dec = decFromLegs;
     payout = wager*dec;
     profit = payout - wager;
-    if(toWinEl && !editingToWin) toWinEl.value = wager ? profit.toFixed(2) : "";
+    if(payoutEl && !editingPayout) payoutEl.value = wager ? payout.toFixed(2) : "";
   } else {
-    // no odds entered — use the manually typed To Win amount as the source of truth
-    const toWin = +(toWinEl ? toWinEl.value : 0) || 0;
-    profit = toWin;
-    payout = wager + toWin;
-    dec = (wager && payout) ? payout/wager : 0;
+    // no odds and no typed payout — just the stake on record (edit payout anytime)
+    payout = wager;
+    profit = 0;
+    dec = 0;
   }
 
   document.getElementById("sumOdds").textContent = (dec && dec>1) ? fmtMult(dec) : "—";
@@ -937,15 +960,9 @@ function renderSummary(){
   document.getElementById("sumLegs").textContent = draftLegs.length;
 }
 
-// When the user types a desired To Win amount with odds present, back-calculate the
-// wager. With no odds, To Win is just a manual amount — leave the wager alone.
-function syncWagerFromToWin(){
-  const dec = combinedDecimal(draftLegs);
-  const toWin = +document.getElementById("toWin").value || 0;
-  const wagerEl = document.getElementById("wager");
-  if(dec && dec>1 && toWin){
-    wagerEl.value = (toWin/(dec-1)).toFixed(2);
-  }
+// Typing in the Payout field flags it as manually owned so it wins over the odds-derived value.
+function onPayoutInput(){
+  payoutTouched = document.getElementById("payout").value!=="";
   renderSummary();
 }
 
@@ -1012,6 +1029,7 @@ function renderBoard(){
         <span class="cs-profit ${profitClass}">${(profitShown>=0?"+":"")+money(profitShown).replace("-","")}</span>
       </div>
       <div class="ticket-legs">${legs}</div>
+      <div class="ticket-note${p.note?'':' empty'}" data-editnote data-id="${p.id}" title="Click to edit note">${p.note?`<span class="note-ico">✎</span>${esc(p.note)}`:`<span class="note-ico">＋</span>Add note`}</div>
       <div class="ticket-foot">
         <div class="nums">
           <div class="n"><div class="k">Wager</div><div class="v editwager" data-editwager data-id="${p.id}" title="Click to adjust your stake">${money(p.wager)}</div></div>
@@ -1040,6 +1058,9 @@ function renderBoard(){
   });
   board.querySelectorAll("[data-editwager]").forEach(el=>{
     el.addEventListener("click", ()=>startEditWager(el));
+  });
+  board.querySelectorAll("[data-editnote]").forEach(el=>{
+    el.addEventListener("click", ()=>startEditNote(el));
   });
   board.querySelectorAll("[data-collapse]").forEach(b=>{
     b.addEventListener("click", ()=>toggleCollapse(b.dataset.id));
@@ -1104,6 +1125,26 @@ function startEditWager(el){
   inp.addEventListener("keydown", e=>{ if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
 }
 
+// click-to-edit the free-text note on a ticket (blank to clear it)
+function startEditNote(el){
+  if(el.querySelector("input")) return;          // already editing
+  const id=el.dataset.id, p=parlays.find(x=>x.id===id); if(!p) return;
+  el.innerHTML=`<input class="note-input" type="text" maxlength="140" value="${esc(p.note||"")}" placeholder="Add a note…" />`;
+  const inp=el.querySelector("input"); inp.focus(); inp.select();
+  let done=false;
+  const commit=ok=>{
+    if(done) return; done=true;
+    if(ok){
+      p.note=inp.value.trim();
+      save();
+      toast(p.note?"Note saved":"Note cleared");
+    }
+    renderAll();
+  };
+  inp.addEventListener("blur", ()=>commit(true));
+  inp.addEventListener("keydown", e=>{ if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
+}
+
 // Cycle an individual leg's result: blank → hit → miss → blank.
 // Lets you mark which pitchers hit even when the overall ticket lost.
 function cycleLegResult(id, idx){
@@ -1132,45 +1173,55 @@ function handleAct(act, id){
 /* ---------- Save parlay ---------- */
 document.getElementById("saveParlay").addEventListener("click", ()=>{
   const legs = draftLegs.filter(l=>l.pitcher.trim()!=="");
-  if(legs.length===0){ toast("Add at least one pitcher leg"); return; }
-  const wager = +document.getElementById("wager").value;
-  if(!wager || wager<=0){ toast("Enter a wager amount"); return; }
-
+  const wager = +document.getElementById("wager").value || 0;
+  const payoutManual = +document.getElementById("payout").value || 0;
   const decFromLegs = combinedDecimal(draftLegs);
-  const toWinManual = +document.getElementById("toWin").value || 0;
-  let dec, payout;
-  if(decFromLegs){
-    // odds entered on the legs — use them
+
+  // Manual-friendly: the only thing we won't save is a completely empty ticket.
+  // Everything else (missing legs, no odds, no wager) is allowed and editable on the board.
+  if(legs.length===0 && !wager && !payoutManual){
+    toast("Add a leg, a wager, or a payout"); return;
+  }
+
+  // A typed payout wins over the odds-derived one; otherwise fall back to odds, then to stake-only.
+  const usePayout = payoutManual>0 && (payoutTouched || !decFromLegs);
+  let dec, payout, payoutEdited=false;
+  if(usePayout){
+    payout = payoutManual;
+    dec = wager>0 ? payout/wager : 1;
+    payoutEdited = true;
+  } else if(decFromLegs){
     dec = decFromLegs;
     payout = wager*dec;
-  } else if(toWinManual>0){
-    // no odds — fall back to the manual To Win amount
-    payout = wager + toWinManual;
-    dec = payout/wager;
   } else {
-    toast("Enter odds on your legs, or a To Win amount"); return;
+    dec = 1; payout = wager;   // stake-only record — set the payout on the board whenever
   }
   const date = document.getElementById("betDate").value || new Date().toISOString().slice(0,10);
+  const note = document.getElementById("betNote").value.trim();
 
   parlays.push({
     id: uid(),
     createdAt: Date.now(),
     date,
+    note,
     legs: legs.map(l=>({...l})),
     wager,
     oddsDec: dec,
     oddsAm: decToAm(dec),
     payout,
+    payoutEdited,
     status:"pending",
     settledAt:null
   });
   save();
   // reset builder
   draftLegs = [ newLeg() ];
+  payoutTouched = false;
   document.getElementById("wager").value="";
-  document.getElementById("toWin").value="";
+  document.getElementById("payout").value="";
+  document.getElementById("betNote").value="";
   renderLegs(); renderSummary(); renderBoard(); renderScoreboard();
-  toast(`${legs.length}-leg parlay placed on the board`);
+  toast(legs.length ? `${legs.length}-leg parlay placed on the board` : "Ticket placed on the board");
 });
 
 document.getElementById("addLeg").addEventListener("click", ()=>{
@@ -1187,7 +1238,7 @@ document.getElementById("tabs").addEventListener("click", e=>{
 });
 
 document.getElementById("wager").addEventListener("input", renderSummary);
-document.getElementById("toWin").addEventListener("input", syncWagerFromToWin);
+document.getElementById("payout").addEventListener("input", onPayoutInput);
 
 /* ---------- Export / Import / Clear ---------- */
 document.getElementById("exportBtn").addEventListener("click", ()=>{
@@ -2198,6 +2249,8 @@ function buildRecommendedParlay(legs){
     return leg;
   });
   if(!draftLegs.length) draftLegs=[newLeg()];
+  payoutTouched = false;
+  document.getElementById("payout").value="";
   renderLegs(); renderSummary();
   const liveN=legs.filter(l=>l.live).length;
   toast(`Suggested ${legs.length}-leg parlay loaded${liveN?` — ${liveN} leg${liveN!==1?"s":""} priced live from Kalshi`:" — odds are estimates"}`);
