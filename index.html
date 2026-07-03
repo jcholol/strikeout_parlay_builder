@@ -442,7 +442,15 @@
   .kpanel .top .proj .lab{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1.5px;color:var(--ink-faint);text-transform:uppercase}
   /* edge board — every arm ranked by model-vs-market gap */
   .edgeboard{margin:4px 0 14px}
-  .eb-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:7px}
+  /* reusable collapsible-section header (slate cards, edge board, ranking) */
+  .sec-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;cursor:pointer;user-select:none;margin:16px 0 8px}
+  .sec-head .sec-title{font-family:"Oswald";font-weight:700;font-size:15px;letter-spacing:1px;color:var(--chalk);text-transform:uppercase}
+  .sec-head .sec-count{color:var(--ink-faint);font-family:"JetBrains Mono";font-size:11px;font-weight:400;letter-spacing:.5px}
+  .collapse-btn.sec-toggle{width:22px;height:22px}
+  .collapse-btn.sec-toggle .chev{transition:transform .15s}
+  .collapse-btn.sec-toggle.is-collapsed .chev{transform:rotate(-90deg)}
+  .sec-head:hover .collapse-btn.sec-toggle{color:var(--chalk);border-color:var(--ink-faint)}
+  .eb-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px;cursor:pointer;user-select:none}
   .eb-title{font-family:"Oswald";font-weight:700;font-size:15px;letter-spacing:1px;color:var(--chalk);text-transform:uppercase}
   .eb-sub{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint)}
   .ebtable{width:100%;border-collapse:collapse}
@@ -639,6 +647,7 @@
           <button class="btn sm amber" id="saveKalshiProxy">Save Proxy</button>
         </div>
       </div>
+      <div class="sec-head" id="slateHead" hidden><span class="sec-title">⚾ Probable Starters <span class="sec-count" id="slateCount"></span></span><button class="collapse-btn sec-toggle" title="Collapse / expand the slate cards" aria-label="Collapse section"><span class="chev">▾</span></button></div>
       <div id="slate"></div>
     </div>
   </section>
@@ -780,6 +789,25 @@ let payoutTouched = false;
 // collapsed ticket ids (view-only state, persisted so the board stays tidy across reloads)
 const collapsed = new Set(JSON.parse(localStorage.getItem("bullpen.collapsed")||"[]"));
 function saveCollapsed(){ localStorage.setItem("bullpen.collapsed", JSON.stringify([...collapsed])); }
+
+// collapsed section keys (slate cards, edge board, ranking) — persisted so the page stays tidy.
+const secCollapsed = new Set(JSON.parse(localStorage.getItem("bullpen.secCollapsed")||"[]"));
+function saveSecCollapsed(){ localStorage.setItem("bullpen.secCollapsed", JSON.stringify([...secCollapsed])); }
+// Wire a section header (with a .sec-toggle button) to show/hide its body, persisting the choice.
+// Clicking anywhere on the header toggles it. Idempotent — safe to call after every re-render.
+function wireSec(head, body, key){
+  if(!head || !body) return;
+  const btn = head.querySelector(".sec-toggle");
+  const apply = ()=>{ const on = secCollapsed.has(key); body.style.display = on?"none":""; if(btn) btn.classList.toggle("is-collapsed", on); };
+  apply();
+  if(head.dataset.secWired) return;   // don't stack listeners on re-wire
+  head.dataset.secWired = "1";
+  head.addEventListener("click", e=>{
+    e.stopPropagation();
+    if(secCollapsed.has(key)) secCollapsed.delete(key); else secCollapsed.add(key);
+    saveSecCollapsed(); apply();
+  });
+}
 
 function newLeg(){ return { pitcher:"", market:"Strikeouts", line:"", side:"Over", odds:"", personId:null, gamePk:null }; }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -1620,6 +1648,9 @@ async function loadSlate(){
     slateState = { games, statById, date, season };
     slate.innerHTML = games.map(g=>matchupCard(g, statById)).join("");
     wireSlate();
+    const slateHead=document.getElementById("slateHead"); slateHead.hidden=false;
+    document.getElementById("slateCount").textContent=`${games.length} game${games.length!==1?"s":""} · ${ids.size} starters`;
+    wireSec(slateHead, slate, "slate");
     const live = games.filter(g=>g.status.abstractGameState==="Live").length;
     setSlateStatus(`${games.length} games · ${ids.size} starters${live?` · ${live} live`:""}`,"ok");
     document.getElementById("kResults").innerHTML=""; kShown=false;
@@ -2431,7 +2462,7 @@ function edgeBoardHTML(rows){
   const anyPriced=cands.some(x=>x.c.edge!=null);
   return `
   <div class="edgeboard">
-    <div class="eb-head"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`model prob vs live Kalshi mid — biggest gaps up top · edge ≥ ${(EV_MARGIN*100)|0} pts is a real play`:"no live Kalshi prices yet — showing model probs; edge fills in when books open"}</span></div>
+    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`model prob vs live Kalshi mid — biggest gaps up top · edge ≥ ${(EV_MARGIN*100)|0} pts is a real play`:"no live Kalshi prices yet — showing model probs; edge fills in when books open"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
     <table class="ebtable">
       <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="model's best line: most model-vs-market edge that still clears the 64% floor">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
       <tbody>${cands.map(({r,c})=>{
@@ -2484,6 +2515,8 @@ function renderKResults(rows, leagueK){
       `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}
     </div>
     ${edgeBoardHTML(rows)}
+    <div class="sec-head" data-sec-head="krank"><span class="sec-title">📋 Pitcher Ranking <span class="sec-count">${rows.length} arm${rows.length!==1?"s":""}</span></span><button class="collapse-btn sec-toggle" title="Collapse / expand the ranking" aria-label="Collapse section"><span class="chev">▾</span></button></div>
+    <div class="krank-sec">
     <table class="krank">
       <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th title="strikeouts in his last up-to-5 starts (most recent last)">L5 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th title="MLB strikeout rank${mlbTotal?` among ${mlbTotal} qualified pitchers`:""}">K Rk${mlbTotal?` <span style="color:var(--ink-faint)">/${mlbTotal}</span>`:""}</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
       <tbody>${rows.map((r,i)=>`<tr data-pid="${r.id}" data-game="${r.gamePk}" data-name="${esc(r.name)}">
@@ -2503,6 +2536,7 @@ function renderKResults(rows, leagueK){
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
       log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
+    </div>
     </div>
   </div>`;
   out.querySelectorAll(".ebtable tbody tr").forEach(tr=>{
@@ -2548,6 +2582,9 @@ function renderKResults(rows, leagueK){
   });
   const recBtn=out.querySelector("#buildRec");
   if(recBtn && rec){ recBtn.addEventListener("click", ()=>buildRecommendedParlay(rec.legs)); }
+  // collapsible sections (persist across re-renders): Edge Board + Pitcher Ranking
+  wireSec(out.querySelector('[data-sec-head="edgeboard"]'), out.querySelector(".edgeboard .ebtable"), "edgeboard");
+  wireSec(out.querySelector('[data-sec-head="krank"]'), out.querySelector(".krank-sec"), "krank");
   document.getElementById("kResults").scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 
