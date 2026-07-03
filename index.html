@@ -346,6 +346,9 @@
   .leg-line .pitcher{font-family:"Oswald";font-weight:600;font-size:16px;letter-spacing:.5px;color:var(--ink);flex:none;min-width:140px}
   .leg-line .prop{font-family:"Barlow Condensed";font-size:15px;color:var(--ink-dim);flex:1}
   .leg-line .prop b{color:var(--chalk);font-weight:600}
+  .leg-line .prop .editline{cursor:pointer;border-bottom:1px dashed var(--ink-faint);transition:color .12s,border-color .12s}
+  .leg-line .prop .editline:hover{color:var(--amber);border-bottom-color:var(--amber)}
+  .leg-line .prop .line-input{width:42px;font-family:"Barlow Condensed";font-weight:600;font-size:15px;padding:0 4px;border:1px solid var(--amber-dim);border-radius:5px;background:var(--bg);color:var(--chalk)}
   .leg-line .odds{font-family:"JetBrains Mono";font-size:13px;color:var(--amber);font-weight:700;flex:none}
   .leg-line[data-legtoggle]{cursor:pointer;border-radius:6px;transition:.12s;padding-left:6px;padding-right:6px}
   .leg-line[data-legtoggle]:hover{background:rgba(255,255,255,.03)}
@@ -1063,7 +1066,7 @@ function renderBoard(){
       <div class="leg-line ${res}${isLiveK?" live":""}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
         <div class="num">${String(i+1).padStart(2,"0")}</div>
         <div class="pitcher">${esc(l.pitcher||"—")}</div>
-        <div class="prop">${l.market==="Strikeouts" ? `<b>${esc(l.line)}+</b> K` : `<b>${esc(l.side)} ${esc(l.line)}</b> ${esc(l.market)}`}${progress}</div>
+        <div class="prop">${l.market==="Strikeouts" ? `<b><span class="editline" data-editline data-id="${p.id}" data-leg="${i}" title="Click to fix the line">${esc(l.line)}</span>+</b> K` : `<b>${esc(l.side)} <span class="editline" data-editline data-id="${p.id}" data-leg="${i}" title="Click to fix the line">${esc(l.line)}</span></b> ${esc(l.market)}`}${progress}</div>
         <div class="odds">${l.odds!==""?fmtMult(l.odds):"—"}</div>
         <div class="legmark">${mark}</div>
       </div>`;}).join("");
@@ -1114,6 +1117,10 @@ function renderBoard(){
   });
   board.querySelectorAll("[data-legtoggle]").forEach(el=>{
     el.addEventListener("click", ()=>cycleLegResult(el.dataset.id, +el.dataset.leg));
+  });
+  // editing the line must not also cycle the leg's hit/miss result
+  board.querySelectorAll("[data-editline]").forEach(el=>{
+    el.addEventListener("click", e=>{ e.stopPropagation(); startEditLine(el); });
   });
   board.querySelectorAll("[data-editpay]").forEach(el=>{
     el.addEventListener("click", ()=>startEditPayout(el));
@@ -1205,6 +1212,36 @@ function startEditNote(el){
   };
   inp.addEventListener("blur", ()=>commit(true));
   inp.addEventListener("keydown", e=>{ if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
+}
+
+// click-to-edit a leg's line (fix a mis-typed target, e.g. entered 5+ but bet 6+). Leaves the
+// odds/payout alone — the multiplier is whatever you actually got — and re-grades the leg against
+// the new line if we already know the pitcher's actual strikeouts.
+function startEditLine(el){
+  if(el.querySelector("input")) return;          // already editing
+  const id=el.dataset.id, idx=+el.dataset.leg;
+  const p=parlays.find(x=>x.id===id); if(!p || !p.legs[idx]) return;
+  const leg=p.legs[idx];
+  el.innerHTML=`<input class="line-input" type="text" inputmode="numeric" value="${esc(leg.line)}" />`;
+  const inp=el.querySelector("input"); inp.focus(); inp.select();
+  let done=false;
+  const commit=ok=>{
+    if(done) return; done=true;
+    if(ok){
+      const v=inp.value.trim();
+      if(v!=="" && v!==String(leg.line)){
+        leg.line=v;
+        // re-grade against the corrected line when the actual K count is already recorded
+        if(leg.actual!=null && leg.market==="Strikeouts") leg.result = (+leg.actual >= +leg.line) ? "hit" : "miss";
+        save();
+        toast("Line updated");
+      }
+    }
+    renderAll();
+  };
+  inp.addEventListener("blur", ()=>commit(true));
+  inp.addEventListener("click", e=>e.stopPropagation());
+  inp.addEventListener("keydown", e=>{ e.stopPropagation(); if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
 }
 
 // Cycle an individual leg's result: blank → hit → miss → blank.
