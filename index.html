@@ -359,6 +359,10 @@
   .leg-line.miss .pitcher{color:var(--red);text-decoration:line-through;text-decoration-color:var(--red-dim)}
   .leg-line.miss{opacity:.7}
   .leg-line .actualk{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);margin-left:7px;white-space:nowrap}
+  .leg-line .actualk.editactual{cursor:pointer;transition:color .12s}
+  .leg-line .actualk.editactual:hover{color:var(--amber)}
+  .leg-line .actualk .addk{border:1px dashed var(--ink-faint);border-radius:4px;padding:0 5px;color:var(--ink-faint)}
+  .leg-line .actualk.editactual:hover .addk{border-color:var(--amber);color:var(--amber)}
   .leg-line.hit .actualk{color:var(--green)}
   .leg-line.miss .actualk{color:var(--red)}
   /* in-game live strikeout tracker */
@@ -1060,7 +1064,9 @@ function renderBoard(){
         ].filter(Boolean).join(" · ");
         progress = `<span class="livek${cleared?" cleared":""}"><span class="live-dot"></span>${l.liveK} K${det?` · ${det}`:""}</span>${kPips(l.liveK, l.line)}`;
       } else {
-        progress = l.actual!=null ? `<span class="actualk">→ ${esc(String(l.actual))}${l.market==="Strikeouts"?" K":""}</span>` : "";
+        // actual result — click to set/fix it by hand (only on the board). Blank shows a subtle
+        // "＋K" so you can record a result on a manual ticket the auto-grader never touches.
+        progress = `<span class="actualk editactual" data-editactual data-id="${p.id}" data-leg="${i}" title="Click to fix the actual result">${l.actual!=null ? `→ ${esc(String(l.actual))}${l.market==="Strikeouts"?" K":""}` : `<span class="addk">＋${l.market==="Strikeouts"?"K":" result"}</span>`}</span>`;
       }
       return `
       <div class="leg-line ${res}${isLiveK?" live":""}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
@@ -1118,9 +1124,12 @@ function renderBoard(){
   board.querySelectorAll("[data-legtoggle]").forEach(el=>{
     el.addEventListener("click", ()=>cycleLegResult(el.dataset.id, +el.dataset.leg));
   });
-  // editing the line must not also cycle the leg's hit/miss result
+  // editing the line / actual must not also cycle the leg's hit/miss result
   board.querySelectorAll("[data-editline]").forEach(el=>{
     el.addEventListener("click", e=>{ e.stopPropagation(); startEditLine(el); });
+  });
+  board.querySelectorAll("[data-editactual]").forEach(el=>{
+    el.addEventListener("click", e=>{ e.stopPropagation(); startEditActual(el); });
   });
   board.querySelectorAll("[data-editpay]").forEach(el=>{
     el.addEventListener("click", ()=>startEditPayout(el));
@@ -1236,6 +1245,37 @@ function startEditLine(el){
         save();
         toast("Line updated");
       }
+    }
+    renderAll();
+  };
+  inp.addEventListener("blur", ()=>commit(true));
+  inp.addEventListener("click", e=>e.stopPropagation());
+  inp.addEventListener("keydown", e=>{ e.stopPropagation(); if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
+}
+
+// click-to-edit a leg's ACTUAL result (the strikeouts a pitcher recorded). Board-only. Lets you
+// hand-correct a graded number or record one on a manual ticket; blank clears it. Re-grades the
+// leg's hit/miss against its line.
+function startEditActual(el){
+  if(el.querySelector("input")) return;          // already editing
+  const id=el.dataset.id, idx=+el.dataset.leg;
+  const p=parlays.find(x=>x.id===id); if(!p || !p.legs[idx]) return;
+  const leg=p.legs[idx];
+  const cur = leg.actual!=null ? String(leg.actual) : "";
+  el.innerHTML=`<input class="line-input" type="text" inputmode="numeric" value="${esc(cur)}" placeholder="K" />`;
+  const inp=el.querySelector("input"); inp.focus(); inp.select();
+  let done=false;
+  const commit=ok=>{
+    if(done) return; done=true;
+    if(ok){
+      const v=inp.value.trim();
+      if(v===""){ leg.actual=null; leg.result=""; }      // cleared → ungraded
+      else { const n=parseInt(v,10); if(!isNaN(n) && n>=0){
+        leg.actual=n;
+        if(leg.market==="Strikeouts") leg.result = (n >= +leg.line) ? "hit" : "miss";
+      }}
+      save();
+      toast(leg.actual!=null?"Result updated":"Result cleared");
     }
     renderAll();
   };
