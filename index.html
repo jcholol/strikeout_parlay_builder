@@ -467,6 +467,30 @@
   .krec-leg .krec-name{font-family:"Oswald";font-weight:600;font-size:15px;color:var(--chalk);letter-spacing:.4px;min-width:150px}
   .krec-leg .krec-bet{font-family:"Barlow Condensed";font-size:15px;color:var(--ink-dim)}
   .krec-leg .krec-p{margin-left:auto;font-family:"JetBrains Mono";font-size:12px;font-weight:700;color:var(--amber)}
+  /* per-leg strikeout ladder — line-by-line model% / market / edge / payout so you can weigh a
+     safer line against the recommended one */
+  .kladder{background:rgba(127,127,127,.06);border:1px solid var(--line);border-radius:8px;padding:9px 10px;margin:3px 0 6px}
+  .kladder .lad-cap{font-family:"JetBrains Mono";font-size:9px;color:var(--ink-faint);letter-spacing:.4px;line-height:1.5;margin-bottom:7px}
+  .kladder .lad-hd,.kladder .lad-row{display:grid;grid-template-columns:38px 1fr 42px 40px 48px 46px;gap:7px;align-items:center}
+  .kladder .lad-hd{font-family:"JetBrains Mono";font-size:8px;letter-spacing:.5px;color:var(--ink-faint);text-transform:uppercase;padding-bottom:4px;border-bottom:1px solid var(--line-soft);margin-bottom:3px}
+  .kladder .lad-hd span:nth-child(n+3){text-align:right}
+  .kladder .lad-row{font-family:"JetBrains Mono";font-size:11px;padding:3px 4px;border-radius:5px}
+  .kladder .lad-row.pick{background:rgba(255,182,39,.13);box-shadow:inset 0 0 0 1px var(--amber-dim)}
+  .kladder .lad-t{font-weight:800;color:var(--chalk)}
+  .kladder .lad-row.pick .lad-t{color:var(--amber)}
+  .kladder .lad-bar{position:relative;height:15px;background:rgba(127,127,127,.16);border-radius:4px;overflow:hidden}
+  .kladder .lad-fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--green-dim)}
+  .kladder .lad-fill.lo{background:rgba(180,90,90,.4)}
+  .kladder .lad-bar .lad-pct{position:absolute;right:5px;top:50%;transform:translateY(-50%);font-size:10px;font-weight:700;color:var(--chalk)}
+  .kladder .lad-mid,.kladder .lad-edge,.kladder .lad-dec,.kladder .lad-delta{text-align:right;font-variant-numeric:tabular-nums}
+  .kladder .lad-mid{color:var(--ink-dim)}
+  .kladder .lad-dec{color:var(--amber);font-weight:700}
+  .kladder .lad-delta{color:var(--ink-faint);font-weight:700}
+  .kladder .lad-star{color:var(--amber);font-size:10px}
+  .kladder .lad-note{font-family:"JetBrains Mono";font-size:10px;line-height:1.5;color:var(--ink-dim);margin-top:7px;padding-top:6px;border-top:1px solid var(--line-soft)}
+  .kladder .lad-note b{color:var(--green)}
+  .krec-leg .ladbtn{margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer}
+  .krec-leg .ladbtn:hover{border-color:var(--amber);color:var(--amber)}
   .krank{width:100%;border-collapse:collapse}
   .krank th{font-family:"JetBrains Mono";font-size:9px;letter-spacing:1px;color:var(--ink-faint);text-transform:uppercase;text-align:right;padding:6px 8px;font-weight:400;border-bottom:1px solid var(--line)}
   .krank th:first-child,.krank th:nth-child(2){text-align:left}
@@ -2336,6 +2360,63 @@ function explainTarget(r, leagueK){
   if(r.vsOppLast) L.push(`Last time vs ${esc(r.oppAb)}: <b>${r.vsOppLast.k} K</b> (${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""})`);
   return `<div style="font-family:'JetBrains Mono';font-size:10px;line-height:1.7;color:var(--ink-dim);padding:8px 10px;background:rgba(127,127,127,.08);border-radius:6px;margin-top:4px">${L.map(x=>`<div>${x}</div>`).join("")}</div>`;
 }
+/* per-leg strikeout ladder: the recommended line ± a couple rungs, each with model win%, live
+   Kalshi price, edge, payout multiplier and the payout swing vs the pick. Surfaces the case the
+   ranker doesn't — a lower, safer line whose edge is nearly as good (better for a parlay, since we
+   multiply win probs). `l` is a recommended leg from candFromRow. */
+function kLadderHTML(l){
+  const r=l.r, proj=r.proj, recT=l.target;
+  const o=kalshiOdds[normName(r.name)];
+  const rungByT={};
+  if(o) o.rungs.forEach(rr=>{ if(rr.mid>0 && rr.dec>1) rungByT[rr.target]=rr; });
+  const rows=[];
+  for(let t=Math.max(2, recT-2); t<=recT+3; t++){
+    const p=poissonGE(proj,t);
+    if(t>recT && p<0.03) break;                 // stop once the higher line is basically unreachable
+    const rr=rungByT[t];
+    const mid=rr?rr.mid:null, dec=rr?rr.dec:estLegDecimal(p);
+    rows.push({ t, p, mid, dec, edge: mid!=null? p-mid : null, live:!!rr });
+  }
+  const recDec=(rows.find(x=>x.t===recT)||{}).dec || l.dec;
+  const priced=rows.some(x=>x.edge!=null);
+  // star the biggest edge AMONG reachable lines (≥ the 64% floor) so it never contradicts the
+  // ranker by pointing at a high line it rejected as too risky; then flag the safest (lowest)
+  // reachable line whose edge is within ~2 pts of it — the "same edge, less variance" case.
+  let bestEdgeT=null, bestEdge=-9;
+  rows.forEach(x=>{ if(x.edge!=null && x.p>=KFLOOR && x.edge>bestEdge){ bestEdge=x.edge; bestEdgeT=x.t; } });
+  let saferT=null;
+  if(priced && bestEdgeT!=null){
+    const near=rows.filter(x=>x.t<recT && x.edge!=null && x.p>=KFLOOR && x.edge >= bestEdge-0.02);
+    if(near.length) saferT=near[0].t;           // lowest such line = safest
+  }
+  const body=rows.map(x=>{
+    const pct=Math.round(x.p*100);
+    const delta = x.t===recT ? "—" : (()=>{ const d=(x.dec/recDec-1)*100; return (d>=0?"+":"")+d.toFixed(0)+"%"; })();
+    const eColor = x.edge==null?"var(--ink-faint)":x.edge>=EV_MARGIN?"var(--green)":x.edge>=0?"var(--amber)":"var(--red)";
+    return `<div class="lad-row${x.t===recT?" pick":""}">
+      <span class="lad-t">${x.t}+${x.t===bestEdgeT&&priced?'<span class="lad-star" title="biggest edge vs the market"> ★</span>':''}</span>
+      <div class="lad-bar"><div class="lad-fill${x.p<KFLOOR?" lo":""}" style="width:${pct}%"></div><span class="lad-pct">${pct}%</span></div>
+      <span class="lad-mid">${x.mid!=null?Math.round(x.mid*100)+"%":"—"}</span>
+      <span class="lad-edge" style="color:${eColor}">${x.edge!=null?(x.edge>=0?"+":"")+Math.round(x.edge*100):"n/a"}</span>
+      <span class="lad-dec">${x.dec.toFixed(2)}×</span>
+      <span class="lad-delta">${delta}</span>
+    </div>`;
+  }).join("");
+  let note="";
+  if(saferT!=null){
+    const s=rows.find(x=>x.t===saferT), pk=rows.find(x=>x.t===recT);
+    const payDelta=Math.round((1-s.dec/recDec)*100);
+    note=`<div class="lad-note">💡 <b>${saferT}+ carries about the same edge</b> (${(s.edge>=0?"+":"")+Math.round(s.edge*100)} vs pick ${(pk.edge>=0?"+":"")+Math.round(pk.edge*100)}) at <b>${Math.round(s.p*100)}%</b> to hit vs ${Math.round(pk.p*100)}% — safer for a parlay, giving up ~${payDelta}% of this leg's payout. The ranker picks pure edge; you may prefer the lower-variance line.</div>`;
+  } else if(!priced){
+    note=`<div class="lad-note">No live Kalshi prices — win% is the model, payout is estimated. Edge fills in once books open.</div>`;
+  }
+  return `<div class="kladder">
+    <div class="lad-cap">STRIKEOUT LADDER · win% = model · Kalshi = market implied · edge = model − market (pts) · payout = leg multiplier · Δ = payout vs the pick</div>
+    <div class="lad-hd"><span>Line</span><span>Model win%</span><span>Kalshi</span><span>Edge</span><span>Pay</span><span>Δ pay</span></div>
+    ${body}${note}
+  </div>`;
+}
+
 /* Edge board: every eligible arm at its best line, ranked by model-vs-market gap. This is the
    pick-list — the model finds the edges, you choose off the live Kalshi prices. */
 function edgeBoardHTML(rows){
@@ -2398,7 +2479,7 @@ function renderKResults(rows, leagueK){
       </div>
       <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ${rec.dec.toFixed(2)}× payout</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
       <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
-      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':' <span style="color:var(--amber);font-size:10px" title="soft — under 65% or hot opponent">soft</span>'}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button></div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK)}</div>`).join("")}</div>
+      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':' <span style="color:var(--amber);font-size:10px" title="soft — under 65% or hot opponent">soft</span>'}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK)}</div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}
     </div>
@@ -2451,6 +2532,14 @@ function renderKResults(rows, leagueK){
     b.addEventListener("click",(e)=>{
       e.stopPropagation();
       const panel=out.querySelector(`[data-why-leg-panel="${b.dataset.whyLeg}"]`);
+      if(panel) panel.style.display = panel.style.display==="none" ? "" : "none";
+    });
+  });
+  // "📊 lines" on a suggested leg → toggle its strikeout-ladder panel
+  out.querySelectorAll(".ladbtn").forEach(b=>{
+    b.addEventListener("click",(e)=>{
+      e.stopPropagation();
+      const panel=out.querySelector(`[data-lad-leg-panel="${b.dataset.ladLeg}"]`);
       if(panel) panel.style.display = panel.style.display==="none" ? "" : "none";
     });
   });
