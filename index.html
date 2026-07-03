@@ -632,6 +632,7 @@
           <button class="btn ghost sm" id="addLeg">+ Add Pitcher Leg</button>
         </div>
         <div id="legList"></div>
+        <datalist id="pitcherList"></datalist>
 
         <div class="row c3" style="margin-top:6px">
           <label class="fld" style="margin-bottom:0">
@@ -890,7 +891,7 @@ function renderLegs(){
   const wrap = document.getElementById("legList");
   wrap.innerHTML = draftLegs.map((l,i)=>`
     <div class="row leg" data-i="${i}">
-      <label><span>Pitcher</span><input data-k="pitcher" value="${esc(l.pitcher)}" placeholder="e.g. Tarik Skubal" /></label>
+      <label><span>Pitcher</span><input data-k="pitcher" list="pitcherList" autocomplete="off" value="${esc(l.pitcher)}" placeholder="e.g. Tarik Skubal" /></label>
       <label><span>Market</span><select data-k="market">${MARKETS.map(m=>`<option ${m===l.market?'selected':''}>${m}</option>`).join("")}</select></label>
       <label><span>Line</span><input data-k="line" value="${esc(l.line)}" placeholder="5" inputmode="numeric" /></label>
       <label><span>Side</span><select data-k="side">${SIDES.map(sd=>`<option ${sd===l.side?'selected':''}>${sd}</option>`).join("")}</select></label>
@@ -905,7 +906,13 @@ function renderLegs(){
       const i = +row.dataset.i;
       const k = e.target.dataset.k;
       draftLegs[i][k] = e.target.value;
-      if(k==="pitcher"){ draftLegs[i].personId=null; draftLegs[i].gamePk=null; } // typed manually → drop stored ids
+      if(k==="pitcher"){
+        // recover the MLBAM id when the typed/picked name matches a known pitcher (helps grading);
+        // otherwise drop stale ids so we don't grade against the wrong player
+        const hit = pitcherIndex && pitcherIndex.byNorm.get(normName(e.target.value));
+        draftLegs[i].personId = hit ? hit.id : null;
+        draftLegs[i].gamePk = null;
+      }
       // live: changing the line/pitcher on a strikeout leg re-pulls the Kalshi multiplier
       if((k==="line"||k==="pitcher"||k==="market") && draftLegs[i].market==="Strikeouts" && draftLegs[i].line!==""){
         const rg=kalshiRungExact(draftLegs[i].pitcher, Math.round(+draftLegs[i].line));
@@ -1499,6 +1506,7 @@ const personCache = {};      // id -> people record (for throw hand)
 const gameCtxCache = {};     // gamePk -> {tempF, condition, wind, umpire}
 const leagueKCache = {};     // season -> K%
 let slateState = null;       // {games, statById, date} of last loaded slate
+let pitcherIndex = null;     // { list:[{id,name,throws}], byNorm:Map } for name autocomplete
 let autoTimer = null;
 let recLegCount = 3;         // chosen parlay size for the suggestion (2–5)
 let lastK = null;            // {rows, leagueK} of the last Best-K analysis, for re-renders
@@ -1509,6 +1517,46 @@ async function jget(url){
   const r = await fetch(url);
   if(!r.ok) throw new Error("HTTP "+r.status);
   return r.json();
+}
+
+/* ---------- Pitcher autocomplete ----------
+   Pull the season's full pitcher list once (cached ~7 days in localStorage) so the builder can
+   suggest names AND recover the MLBAM id when you type/pick one — that id is what lets a manually
+   added leg still grade & live-track. */
+function indexPitchers(list){
+  const byNorm = new Map();
+  list.forEach(p=> byNorm.set(normName(p.name), p));
+  return { list, byNorm };
+}
+async function loadPitcherIndex(){
+  if(pitcherIndex) return pitcherIndex;
+  const season = new Date().getFullYear();
+  const cacheKey = "bullpen.pitchers."+season;
+  try{
+    const c = JSON.parse(localStorage.getItem(cacheKey)||"null");
+    if(c && Array.isArray(c.list) && c.list.length && (Date.now()-c.at) < 7*864e5){
+      return pitcherIndex = indexPitchers(c.list);
+    }
+  }catch(e){}
+  try{
+    const d = await jget(`${MLB}/sports/1/players?season=${season}`);
+    const list = (d.people||[])
+      .filter(p=> p.primaryPosition && (p.primaryPosition.abbreviation==="P" || p.primaryPosition.type==="Pitcher"))
+      .map(p=>({ id:p.id, name:p.fullName, throws:(p.pitchHand&&p.pitchHand.code)||null }));
+    if(list.length) localStorage.setItem(cacheKey, JSON.stringify({at:Date.now(), list}));
+    return pitcherIndex = indexPitchers(list);
+  }catch(e){ return pitcherIndex = indexPitchers([]); }
+}
+function fillPitcherDatalist(){
+  const dl = document.getElementById("pitcherList");
+  if(!dl || !pitcherIndex) return;
+  dl.innerHTML = pitcherIndex.list
+    .slice().sort((a,b)=>a.name.localeCompare(b.name))
+    .map(p=>`<option value="${esc(p.name)}"></option>`).join("");
+}
+// non-blocking: warm the index at startup so the datalist is ready by the time you build a leg
+function initPitcherAutocomplete(){
+  loadPitcherIndex().then(fillPitcherDatalist).catch(()=>{});
 }
 
 /* map our market -> boxscore pitching field (numeric markets) */
@@ -2929,6 +2977,7 @@ document.getElementById("betDate").value = new Date().toISOString().slice(0,10);
 document.getElementById("slateDate").value = new Date().toISOString().slice(0,10);
 updateOddsKeyDot();
 renderLegs(); renderSummary(); renderAll();
+initPitcherAutocomplete();
 startAutoGrade();
 startLiveTracking();
 if(syncReady()){ setSync("on",""); syncNow(true); } else setSync("off","");
