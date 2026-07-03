@@ -450,6 +450,8 @@
   .collapse-btn.sec-toggle .chev{transition:transform .15s}
   .collapse-btn.sec-toggle.is-collapsed .chev{transform:rotate(-90deg)}
   .sec-head:hover .collapse-btn.sec-toggle{color:var(--chalk);border-color:var(--ink-faint)}
+  .sec-head-inline{cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px}
+  .sec-head-inline:hover .collapse-btn.sec-toggle{color:var(--chalk);border-color:var(--ink-faint)}
   .eb-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px;cursor:pointer;user-select:none}
   .eb-title{font-family:"Oswald";font-weight:700;font-size:15px;letter-spacing:1px;color:var(--chalk);text-transform:uppercase}
   .eb-sub{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint)}
@@ -618,6 +620,7 @@
   </header>
 
   <!-- SCOREBOARD -->
+  <div class="sec-head" id="scoreHead"><span class="sec-title">📊 Season Snapshot</span><button class="collapse-btn sec-toggle" title="Collapse / expand your season stats" aria-label="Collapse section"><span class="chev">▾</span></button></div>
   <section class="scoreboard" id="scoreboard"></section>
   <div class="legrec" id="legBreakdown"></div>
 
@@ -2497,10 +2500,10 @@ function renderKResults(rows, leagueK){
     </div>
     <div class="krec">
       <div class="krec-head">
-        <span class="krec-title">🎟️ Suggested Parlay</span>
+        <span class="krec-title sec-head-inline" data-sec-head="krec" title="Collapse / expand the suggested parlay">🎟️ Suggested Parlay <button class="collapse-btn sec-toggle" style="width:20px;height:20px" aria-label="Collapse section"><span class="chev">▾</span></button></span>
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
-      ${rec ? (()=>{
+      <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
         const vIcon  = rec.verdict==="GO"?"✅":rec.verdict==="SKIP"?"🛑":"⚠️";
         return `
@@ -2512,7 +2515,7 @@ function renderKResults(rows, leagueK){
       <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
       <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':' <span style="color:var(--amber);font-size:10px" title="soft — under 65% or hot opponent">soft</span>'}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK)}</div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
-      `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}
+      `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}</div>
     </div>
     ${edgeBoardHTML(rows)}
     <div class="sec-head" data-sec-head="krank"><span class="sec-title">📋 Pitcher Ranking <span class="sec-count">${rows.length} arm${rows.length!==1?"s":""}</span></span><button class="collapse-btn sec-toggle" title="Collapse / expand the ranking" aria-label="Collapse section"><span class="chev">▾</span></button></div>
@@ -2582,7 +2585,8 @@ function renderKResults(rows, leagueK){
   });
   const recBtn=out.querySelector("#buildRec");
   if(recBtn && rec){ recBtn.addEventListener("click", ()=>buildRecommendedParlay(rec.legs)); }
-  // collapsible sections (persist across re-renders): Edge Board + Pitcher Ranking
+  // collapsible sections (persist across re-renders): Suggested Parlay + Edge Board + Ranking
+  wireSec(out.querySelector('[data-sec-head="krec"]'), out.querySelector(".krec-body"), "krec");
   wireSec(out.querySelector('[data-sec-head="edgeboard"]'), out.querySelector(".edgeboard .ebtable"), "edgeboard");
   wireSec(out.querySelector('[data-sec-head="krank"]'), out.querySelector(".krank-sec"), "krank");
   document.getElementById("kResults").scrollIntoView({behavior:"smooth",block:"nearest"});
@@ -3103,6 +3107,7 @@ document.getElementById("betDate").value = new Date().toISOString().slice(0,10);
 document.getElementById("slateDate").value = new Date().toISOString().slice(0,10);
 updateOddsKeyDot();
 renderLegs(); renderSummary(); renderAll();
+wireSec(document.getElementById("scoreHead"), document.getElementById("scoreboard"), "scoreboard");
 initPitcherAutocomplete();
 startAutoGrade();
 startLiveTracking();
