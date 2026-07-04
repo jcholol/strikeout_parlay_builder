@@ -2454,7 +2454,8 @@ const FORM_MIN_RATE=0.34; // and he must have actually reached the line in ≥ t
 const QUAL_K=0.23;    // strong-leg quality floor: pitcher K rate/batter (league ~.22) …
 const QUAL_WHIFF=25;  // …or Statcast whiff% — either clears it; a contact arm fails both
 const QUAL_MIN_GS=5;  // and he needs a real sample this season (no 1–4 start call-ups)
-const REC_SHORTLIST=5; // Beat-the-Market: shortlist the top-N matchups by projection, then pick by edge
+const REC_SHORTLIST=7; // Beat-the-Market: shortlist the top-N matchups by projection, then pick by edge
+                       // (7 so even a 5-leg parlay still picks the best gaps out of a wider matchup pool)
 // recent-form reachability: how often he ACTUALLY hit a target line in his last up-to-10 starts.
 // This is the guardrail against the model over-projecting a mediocre arm and floating him up the
 // board on a fat-payout line his own recent starts say he never reaches. Unknown history (n<FORM_MIN_N)
