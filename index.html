@@ -1660,7 +1660,10 @@ let slateState = null;       // {games, statById, date} of last loaded slate
 let pitcherIndex = null;     // { list:[{id,name,throws}], byNorm:Map } for name autocomplete
 let autoTimer = null;
 let recLegCount = 3;         // chosen parlay size for the suggestion (2–5)
-let recMode = "market";      // suggested-parlay lens: "market" (beat the price) | "stat" (best on the model)
+let recMode = "stat";        // suggestion brain: STATS ONLY. The "beat the market" lens was retired —
+                             // edge-ranking structurally favors arms the market distrusts (Wacha/Rocker
+                             // class), i.e. exactly the legs that don't hit. Kalshi prices are still
+                             // used for payout + shown as reference, never for picking.
 let lastK = null;            // {rows, leagueK} of the last Best-K analysis, for re-renders
 let kShown = false;          // are Best-K results currently displayed?
 let _lastKrefresh = 0;       // throttle background re-analysis (lineup updates)
@@ -2486,7 +2489,7 @@ function formReach(r, target){
 //   'stat'   → CONFIDENCE: the most aggressive line still clearing the floor, edge IGNORED for
 //              selection; "strong" is model probability alone. A market price (if any) is attached
 //              for display only. This is the "best on the stats, needn't beat the market" pick.
-function candFromRow(r, mode='market'){
+function candFromRow(r, mode='stat'){   // default: stats pick the line; market price is reference
   const o=kalshiOdds[normName(r.name)];
   const priced = o ? o.rungs.filter(rr=>rr.bid>0 && rr.ask<=0.92 && (rr.ask-rr.bid)<=0.25 && rr.mid>0) : [];
   const rungAt = t => priced.find(rr=>rr.target===t) || null;
@@ -2548,7 +2551,7 @@ function skipReason(r, c, mode, ctx){
   return mode==='stat'  ? `lower model confidence (${(c.p*100).toFixed(0)}% at ${c.target}+)`
                         : `smaller market gap (${c.edge!=null?`${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts`:`no live price`})`;
 }
-function recommendParlay(rows, nLegs, mode='market'){
+function recommendParlay(rows, nLegs, mode='stat'){
   const isQuality = r => r.pK>=QUAL_K;   // blended K rate only — no whiff bypass
   const isProven  = r => !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
   // "Best stats" gate FIRST: only genuine, proven strikeout arms whose recent form supports the line
@@ -2637,7 +2640,7 @@ function buildRecommendedParlay(legs){
 function pctDelta(f){ if(f==null) return "0%"; const d=(f-1)*100; if(Math.abs(d)<0.5) return "0%"; return (d>0?"+":"")+d.toFixed(0)+"%"; }
 /* the clickable "why N+?" breakdown — Poisson ladder + the floor rule + every factor that
    built the projection, so a target is never a black box. */
-function explainTarget(r, leagueK, mode='market'){
+function explainTarget(r, leagueK, mode='stat'){
   // Use the SAME candidate (and mode) the Suggested Parlay uses, so the line + STRONG/soft verdict
   // here can never contradict the leg tag. Market mode: "strong" is a real edge vs the Kalshi price
   // (≥EV_MARGIN, or the ≥65% read with no price); stat mode: model prob ≥ STAT_STRONG.
@@ -2754,9 +2757,9 @@ function edgeBoardHTML(rows){
   const anyPriced=cands.some(x=>x.c.edge!=null);
   return `
   <div class="edgeboard">
-    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`real plays first, then biggest edge · dimmed = soft (contact/unproven/not reaching the line)`:"no live Kalshi prices yet — real plays first, then model prob; dimmed = soft"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
+    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`reference only — the model's stat-picked line with the Kalshi price on it · dimmed = soft (contact/unproven/cold form) · picks are never edge-driven`:"no live Kalshi prices yet — model's stat-picked lines; prices fill in when books open"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
     <table class="ebtable">
-      <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="model's best line: most model-vs-market edge that still clears the 64% floor">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
+      <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="the model's stat-picked line: highest line still ≥64% that his recent form supports">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
       <tbody>${cands.map(({r,c})=>{
         const eColor = c.edge==null?"var(--ink-faint)":c.edge>=EV_MARGIN?"var(--green)":c.edge>=0?"var(--amber)":"var(--red)";
         return `<tr data-eb-pid="${r.id}" data-eb-game="${r.gamePk}" data-eb-name="${esc(r.name)}" data-eb-line="${c.target}"${c.strong?'':' style="opacity:.5"'} title="${c.strong?`click to add ${esc(r.name)} ${c.target}+ K to the builder`:`soft — ${esc(c.softReason||"")} · click to add anyway`}">
@@ -2793,9 +2796,7 @@ function renderKResults(rows, leagueK){
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
       <div class="krec-modes">
-        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Must clear BOTH doors: a top-${REC_SHORTLIST} matchup (projection) AND a top-${REC_SHORTLIST} arm (his own K talent) — then the biggest market GAPS win. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
-        <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Same double shortlist (top matchups ∩ top arms), ranked by model confidence instead of price. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored.">💪 Best on Stats</button>
-        <span class="krec-modenote">${recMode==="stat"?`top matchups ∩ top arms, ranked by model confidence`:`top matchups ∩ top arms, ranked by market gap`}</span>
+        <span class="krec-modenote">💪 stats only — top matchups ∩ top arms, ranked by model confidence · Kalshi prices are payout/reference, never the reason for a pick</span>
       </div>
       <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
@@ -2882,10 +2883,6 @@ function renderKResults(rows, leagueK){
   });
   out.querySelectorAll(".legbtn").forEach(b=>{
     b.addEventListener("click", ()=>{ recLegCount=+b.dataset.legs; renderKResults(lastK.rows, lastK.leagueK); });
-  });
-  // 📈 Beat the Market / 💪 Best on Stats — toggle the suggestion lens
-  out.querySelectorAll(".modebtn").forEach(b=>{
-    b.addEventListener("click", ()=>{ recMode=b.dataset.mode; renderKResults(lastK.rows, lastK.leagueK); });
   });
   const recBtn=out.querySelector("#buildRec");
   if(recBtn && rec){ recBtn.addEventListener("click", ()=>buildRecommendedParlay(rec.legs)); }
