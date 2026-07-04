@@ -1944,8 +1944,8 @@ function whiffBlend(kRate, n, whiffPct){
    AVERAGE lineup facing that same mix → mixEdge (pts). League-relative is the discriminating
    baseline: power pitches (FF/SL/FS) whiff more than the average pitch, so comparing to the team's
    own overall whiff would read positive for almost every strikeout arm. Vs league it isolates the
-   lineups that specifically handle (mixEdge<0) or get beat by (mixEdge>0) his stuff. DISPLAY-ONLY
-   for now: shown in the ranking + "why?" panel, not yet folded into the projection. */
+   lineups that specifically handle (mixEdge<0) or get beat by (mixEdge>0) his stuff. Folded into the
+   projection as arsenalF (~1% per whiff-point, capped ±6%) and shown in the ranking + "why?" panel. */
 const arsenalCache={};   // season -> { pit:{id:[{type,name,usage,whiff,putaway}]}, batId:{id:{type:{whiff,pitches}}}, batTeam:{abbr:{type:{whiff,pitches}}}, lg:{type:whiff} }
 const ARSENAL="https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats";
 async function loadArsenal(season){
@@ -2334,14 +2334,16 @@ async function analyzeK(opts={}){
           if(form.streak && form.streak.type==="W" && sn>=3) momentumF -= Math.min(0.06, (sn-2)*0.01);
           momentumF=Math.max(0.90, Math.min(1.00, momentumF));
         }
-        // environmental adjustments: park, weather, workload, early-exit risk
+        // environmental adjustments: park, weather, workload, early-exit risk, arsenal matchup
         const parkF=parkKFactor(g.venue?.name);
         const weatherF=weatherKFactor(ctx.tempF);
         const work=workloadAdjust(log, slateState.date);
-        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF);
-        m.projBase=m.proj; m.proj=adjProj;
-        // pitch-arsenal matchup: his mix vs the posted 9's (or team's) per-pitch whiff (display-only)
+        // pitch-arsenal matchup: his mix vs the posted 9's (or team's) per-pitch whiff
         const arsM=arsenalMatchup(pp.id, (lu&&lu.order)?lu.order:null, opp.team.abbreviation||"", arsenal);
+        // fold the (league-relative) mix edge into the projection, ~1% per whiff-point, capped ±6%
+        const arsenalF=(arsM && arsM.mixEdge!=null) ? Math.max(0.94, Math.min(1.06, 1 + 0.010*arsM.mixEdge)) : 1.00;
+        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF * arsenalF);
+        m.projBase=m.proj; m.proj=adjProj;
         rows.push({
           name:pp.fullName, id:pp.id, gamePk:g.gamePk,
           opp:shortName(opp.team.name), oppAb:opp.team.abbreviation||shortName(opp.team.name),
@@ -2352,7 +2354,7 @@ async function analyzeK(opts={}){
           oppRecord: opp.leagueRecord ? `${opp.leagueRecord.wins}-${opp.leagueRecord.losses}` : "",
           oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
           venue: g.venue?.name || "",
-          hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase, arsenal:arsM,
+          hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase, arsenal:arsM, arsenalF,
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
           momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
           oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
@@ -2584,6 +2586,7 @@ function explainTarget(r, leagueK, mode='market'){
   if(Math.abs((r.weatherF||1)-1)>=0.005) mults.push(`weather ${pctDelta(r.weatherF)}`);
   if(Math.abs((r.workFactor||1)-1)>=0.005) mults.push(`workload ${pctDelta(r.workFactor)}`);
   if(Math.abs((r.momentumF||1)-1)>=0.005) mults.push(`early-exit ${pctDelta(r.momentumF)}`);
+  if(Math.abs((r.arsenalF||1)-1)>=0.005) mults.push(`arsenal ${pctDelta(r.arsenalF)}`);
   L.push(`Proj ${(r.projBase!=null?r.projBase:r.proj).toFixed(1)} → <b>${r.proj.toFixed(1)} K</b>${mults.length?` (${mults.join(", ")})`:""}`);
   L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`);
   // Tier-1: show where the whiff signal regressed a noisy outcome K rate
@@ -2597,7 +2600,7 @@ function explainTarget(r, leagueK, mode='market'){
     const mix=a.top.map(p=>`${esc(p.name||p.type)} ${p.usage.toFixed(0)}%${p.lineupWhiff!=null?` <span style="color:var(--ink-faint)">(they whiff ${p.lineupWhiff.toFixed(0)}%)</span>`:""}`).join(" · ");
     L.push(`Arsenal: ${mix}`);
     if(a.mixEdge!=null)
-      L.push(`Vs his mix this ${a.source==="lineup"?"lineup":"team"} whiffs <b>${a.arsWhiff.toFixed(0)}%</b> vs a league-avg lineup's <b>${a.lgMixWhiff.toFixed(0)}%</b> → <b style="color:${a.mixEdge>=1?'var(--green)':a.mixEdge<=-1?'var(--red)':'var(--amber)'}">${a.mixEdge>=0?'+':''}${a.mixEdge.toFixed(1)} pts</b> ${a.mixEdge<=-1?"— they handle his pitches better than average":a.mixEdge>=1?"— his stuff is a tough matchup for them":"— roughly league-average"} <span style="color:var(--ink-faint)">(display-only, not yet in the projection)</span>`);
+      L.push(`Vs his mix this ${a.source==="lineup"?"lineup":"team"} whiffs <b>${a.arsWhiff.toFixed(0)}%</b> vs a league-avg lineup's <b>${a.lgMixWhiff.toFixed(0)}%</b> → <b style="color:${a.mixEdge>=1?'var(--green)':a.mixEdge<=-1?'var(--red)':'var(--amber)'}">${a.mixEdge>=0?'+':''}${a.mixEdge.toFixed(1)} pts</b> ${a.mixEdge<=-1?"— they handle his pitches better than average":a.mixEdge>=1?"— his stuff is a tough matchup for them":"— roughly league-average"} <span style="color:var(--ink-faint)">(${Math.abs((r.arsenalF||1)-1)>=0.005?`applied: ${pctDelta(r.arsenalF)} on the projection`:`≈0% on the projection`})</span>`);
   }
   if(r.oppStreak) L.push(`Opp momentum: ${r.oppStreak.type}${r.oppStreak.n} streak${r.oppWL?`, ${r.oppWL.w}-${r.oppWL.l} last ${r.oppWL.w+r.oppWL.l}`:""}${r.oppRecentK!=null?`, recent K ${(r.oppRecentK*100).toFixed(1)}% vs ${((r.oppSeasonK||r.oppK)*100).toFixed(1)}% season`:""}`);
   if(r.vsOppLast) L.push(`Last time vs ${esc(r.oppAb)}: <b>${r.vsOppLast.k} K</b> (${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""})`);
@@ -2751,7 +2754,7 @@ function renderKResults(rows, leagueK){
       <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="10" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
-      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
+      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload, opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances) & pitch-arsenal matchup (how this lineup whiffs vs his specific pitch mix, league-relative)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
     </div>
     </div>
   </div>`;
