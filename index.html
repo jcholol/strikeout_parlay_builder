@@ -1926,6 +1926,78 @@ function whiffBlend(kRate, n, whiffPct){
   const kFromWhiff=WHIFF_TO_K*(whiffPct/100);
   return { k:(n*kRate + WHIFF_K0*kFromWhiff)/(n+WHIFF_K0), kFromWhiff };
 }
+
+/* ---- Pitch-arsenal matchup (Statcast "pitch-arsenal-stats") ----
+   Two more open-CORS Savant leaderboards, joined by the same MLBAM player_id:
+     · type=pitcher → each arm's pitch MIX (pitch_usage %) + how nasty each pitch is (whiff%)
+     · type=batter  → each hitter's whiff% vs EACH pitch type (and, aggregated, each team's)
+   The generic lineup K% is pitch-blind: a lineup can whiff a lot overall yet handle the two or
+   three pitches THIS starter actually throws (or vice-versa). We weight the lineup's per-pitch
+   whiff by his usage to get the lineup's expected whiff vs HIS mix, and compare it to a LEAGUE-
+   AVERAGE lineup facing that same mix → mixEdge (pts). League-relative is the discriminating
+   baseline: power pitches (FF/SL/FS) whiff more than the average pitch, so comparing to the team's
+   own overall whiff would read positive for almost every strikeout arm. Vs league it isolates the
+   lineups that specifically handle (mixEdge<0) or get beat by (mixEdge>0) his stuff. DISPLAY-ONLY
+   for now: shown in the ranking + "why?" panel, not yet folded into the projection. */
+const arsenalCache={};   // season -> { pit:{id:[{type,name,usage,whiff,putaway}]}, batId:{id:{type:{whiff,pitches}}}, batTeam:{abbr:{type:{whiff,pitches}}}, lg:{type:whiff} }
+const ARSENAL="https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats";
+async function loadArsenal(season){
+  if(arsenalCache[season]) return arsenalCache[season];
+  const out={pit:{}, batId:{}, batTeam:{}, lg:{}};
+  try{
+    const pURL=`${ARSENAL}?type=pitcher&pitchType=&year=${season}&team=&min=10&csv=true`;
+    const bURL=`${ARSENAL}?type=batter&pitchType=&year=${season}&team=&min=10&csv=true`;
+    const [pt,bt]=await Promise.all([fetch(pURL).then(r=>r.text()), fetch(bURL).then(r=>r.text())]);
+    const pr=parseCSV(pt), ph=pr[0]||[]; const pc=n=>ph.indexOf(n);
+    const pId=pc("player_id"),pTy=pc("pitch_type"),pNm=pc("pitch_name"),pUse=pc("pitch_usage"),pWh=pc("whiff_percent"),pPA=pc("put_away");
+    pr.slice(1).forEach(r=>{ const id=+r[pId]; if(!id||!r[pTy]) return;
+      (out.pit[id]||(out.pit[id]=[])).push({type:r[pTy], name:r[pNm], usage:parseFloat(r[pUse])||0, whiff:parseFloat(r[pWh]), putaway:parseFloat(r[pPA])}); });
+    Object.values(out.pit).forEach(a=>a.sort((x,y)=>y.usage-x.usage));   // most-thrown first
+    const br=parseCSV(bt), bh=br[0]||[]; const bc=n=>bh.indexOf(n);
+    const bId=bc("player_id"),bTm=bc("team_name_alt"),bTy=bc("pitch_type"),bWh=bc("whiff_percent"),bPi=bc("pitches");
+    br.slice(1).forEach(r=>{ const id=+r[bId], ty=r[bTy]; if(!id||!ty) return;
+      const wh=parseFloat(r[bWh]), pi=parseFloat(r[bPi])||0; if(!(pi>0)||isNaN(wh)) return;
+      (out.batId[id]||(out.batId[id]={}))[ty]={whiff:wh, pitches:pi};
+      const tm=r[bTm]; if(tm){ const T=out.batTeam[tm]||(out.batTeam[tm]={}); const e=T[ty]||(T[ty]={wSum:0,pSum:0}); e.wSum+=wh*pi; e.pSum+=pi; }
+      const Lg=out.lg[ty]||(out.lg[ty]={wSum:0,pSum:0}); Lg.wSum+=wh*pi; Lg.pSum+=pi; });   // league per-pitch whiff baseline
+    Object.values(out.batTeam).forEach(T=>Object.keys(T).forEach(ty=>{ const e=T[ty]; T[ty]={whiff:e.pSum?e.wSum/e.pSum:null, pitches:e.pSum}; }));
+    Object.keys(out.lg).forEach(ty=>{ const e=out.lg[ty]; out.lg[ty]=e.pSum?e.wSum/e.pSum:null; });
+  }catch(e){}
+  return arsenalCache[season]=out;
+}
+// weight the pitcher's mix by the opposing lineup's per-pitch whiff. lineupIds = posted 9 (precise,
+// pitches-weighted); null → fall back to the team-season aggregate. Returns null if we can't cover
+// enough of his arsenal.
+function arsenalMatchup(pitcherId, lineupIds, teamAbbr, A){
+  const ars=A.pit[pitcherId]; if(!ars||!ars.length) return null;
+  let usedLineup=false;
+  const whiffVs=ty=>{
+    if(lineupIds&&lineupIds.length){
+      let w=0,p=0; lineupIds.forEach(id=>{ const e=A.batId[id]?.[ty]; if(e&&e.pitches>0){ w+=e.whiff*e.pitches; p+=e.pitches; } });
+      if(p>0){ usedLineup=true; return w/p; }
+    }
+    const t=A.batTeam[teamAbbr]?.[ty]; return t&&t.whiff!=null ? t.whiff : null;
+  };
+  const overall=()=>{
+    let w=0,p=0;
+    if(lineupIds&&lineupIds.length){ lineupIds.forEach(id=>{ const m=A.batId[id]; if(m) Object.values(m).forEach(e=>{ w+=e.whiff*e.pitches; p+=e.pitches; }); }); if(p>0) return w/p; }
+    const T=A.batTeam[teamAbbr]; if(T) Object.values(T).forEach(e=>{ if(e.whiff!=null){ w+=e.whiff*e.pitches; p+=e.pitches; } });
+    return p>0?w/p:null;
+  };
+  const top=[]; let wSum=0,uSum=0,lgW=0,lgU=0;
+  ars.forEach(pp=>{
+    if(pp.usage<3) return;                       // skip rarely-thrown pitches
+    const lw=whiffVs(pp.type), lg=A.lg[pp.type];
+    top.push({type:pp.type, name:pp.name, usage:pp.usage, pWhiff:pp.whiff, lineupWhiff:lw, lgWhiff:lg!=null?lg:null});
+    if(lw!=null){ wSum+=pp.usage*lw; uSum+=pp.usage; }
+    if(lg!=null){ lgW+=pp.usage*lg; lgU+=pp.usage; }
+  });
+  if(!uSum) return null;
+  const arsWhiff=wSum/uSum, lgMixWhiff=lgU?lgW/lgU:null, overallWhiff=overall();
+  return { top:top.slice(0,5), arsWhiff, lgMixWhiff, overallWhiff,
+           mixEdge: lgMixWhiff!=null?arsWhiff-lgMixWhiff:null,   // vs a league-average lineup facing his same mix
+           covered:uSum, source: usedLineup?"lineup":"team" };
+}
 async function getTeamForm(teamId, season, asOf){
   const k=season+":"+teamId+":"+asOf;
   if(k in teamFormCache) return teamFormCache[k];
@@ -2188,6 +2260,7 @@ async function analyzeK(opts={}){
     const info=await getTeamInfo();
     const lgRanks=await getLeagueRanks(season);
     const savant=await loadSavant(season);   // Statcast whiff% / chase% (Tier-1 stuff)
+    const arsenal=await loadArsenal(season); // Statcast pitch mix + per-pitch-type lineup whiff
     const rows=[];
     for(const g of games){
       for(const side of ["away","home"]){
@@ -2260,6 +2333,8 @@ async function analyzeK(opts={}){
         const work=workloadAdjust(log, slateState.date);
         const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF);
         m.projBase=m.proj; m.proj=adjProj;
+        // pitch-arsenal matchup: his mix vs the posted 9's (or team's) per-pitch whiff (display-only)
+        const arsM=arsenalMatchup(pp.id, (lu&&lu.order)?lu.order:null, opp.team.abbreviation||"", arsenal);
         rows.push({
           name:pp.fullName, id:pp.id, gamePk:g.gamePk,
           opp:shortName(opp.team.name), oppAb:opp.team.abbreviation||shortName(opp.team.name),
@@ -2270,7 +2345,7 @@ async function analyzeK(opts={}){
           oppRecord: opp.leagueRecord ? `${opp.leagueRecord.wins}-${opp.leagueRecord.losses}` : "",
           oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
           venue: g.venue?.name || "",
-          hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase,
+          hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase, arsenal:arsM,
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
           momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
           oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
@@ -2302,6 +2377,8 @@ function pitcherNote(r){
   if(r.hand) tags.push(r.hand==="L"?"LHP":"RHP");
   // Tier-1 stuff first: whiff% (whiffs/swing). League ~25%; <22% = soft stuff (regression risk).
   if(r.pWhiff!=null) tags.push(`${r.pWhiff.toFixed(0)}% whiff${r.pWhiff>=32?" 🔥":r.pWhiff<22?" ⚠️soft":""}`);
+  // arsenal: his top pitches by usage (🎛 FF54/SL30/CH16)
+  if(r.arsenal && r.arsenal.top.length) tags.push("🎛 "+r.arsenal.top.slice(0,3).map(p=>`${p.type}${p.usage.toFixed(0)}`).join("/"));
   const ipN=ipToNum(r.ip);
   if(ipN>=10 && r.so){ const k9=r.so/ipN*9; tags.push(`${k9>=11?Math.round(k9)+"+":k9.toFixed(1)} K/9`); }
   // (MLB/league K rank moved next to the pitcher's name in the ranking table — no longer duplicated here)
@@ -2323,6 +2400,13 @@ function lineupNote(r, leagueK){
   else if(diff<=-2) desc="tough contact";
   else desc="avg contact";
   tags.push(r.lineupUsed ? "📋 "+desc : desc);   // 📋 = actual posted lineup, not season avg
+  // pitch-arsenal matchup: does this lineup whiff more/less vs HIS specific mix than overall?
+  if(r.arsenal && r.arsenal.mixEdge!=null){
+    const me=r.arsenal.mixEdge, pfx=r.arsenal.source==="lineup"?"📋 ":"";
+    tags.push(pfx + (me>=1.5?`+${me.toFixed(0)}% whiff vs his mix 🎯`
+                    : me<=-1.5?`handles his mix ${me.toFixed(0)}%`
+                    : `neutral vs his mix`));
+  }
   // momentum: win/loss streak + recent K-form vs the projection's lineup rate
   let hot=false;
   if(r.oppStreak && r.oppStreak.n>=3){ const s=r.oppStreak; tags.push(`${s.type==="W"?"🔥":"🧊"} ${s.type}${s.n}`); if(s.type==="W"&&s.n>=4) hot=true; }
@@ -2473,6 +2557,14 @@ function explainTarget(r, leagueK){
     L.push(`Stuff: ${r.pWhiff.toFixed(0)}% whiff → K ${(r.pKraw*100).toFixed(1)}% regressed to <b>${(r.pK*100).toFixed(1)}%</b> (whiff-implied ${(r.pKfromWhiff*100).toFixed(1)}%, small sample)`);
   else if(r.pWhiff!=null)
     L.push(`Stuff: <b>${r.pWhiff.toFixed(0)}% whiff</b>${r.pWhiff<22?" — soft, regression risk":r.pWhiff>=32?" — elite":""}${r.oppChase!=null?` · lineup chase ${r.oppChase.toFixed(0)}%`:""}`);
+  // pitch-arsenal matchup — his mix vs how this lineup whiffs at each of those pitches
+  if(r.arsenal && r.arsenal.top.length){
+    const a=r.arsenal;
+    const mix=a.top.map(p=>`${esc(p.name||p.type)} ${p.usage.toFixed(0)}%${p.lineupWhiff!=null?` <span style="color:var(--ink-faint)">(they whiff ${p.lineupWhiff.toFixed(0)}%)</span>`:""}`).join(" · ");
+    L.push(`Arsenal: ${mix}`);
+    if(a.mixEdge!=null)
+      L.push(`Vs his mix this ${a.source==="lineup"?"lineup":"team"} whiffs <b>${a.arsWhiff.toFixed(0)}%</b> vs a league-avg lineup's <b>${a.lgMixWhiff.toFixed(0)}%</b> → <b style="color:${a.mixEdge>=1?'var(--green)':a.mixEdge<=-1?'var(--red)':'var(--amber)'}">${a.mixEdge>=0?'+':''}${a.mixEdge.toFixed(1)} pts</b> ${a.mixEdge<=-1?"— they handle his pitches better than average":a.mixEdge>=1?"— his stuff is a tough matchup for them":"— roughly league-average"} <span style="color:var(--ink-faint)">(display-only, not yet in the projection)</span>`);
+  }
   if(r.oppStreak) L.push(`Opp momentum: ${r.oppStreak.type}${r.oppStreak.n} streak${r.oppWL?`, ${r.oppWL.w}-${r.oppWL.l} last ${r.oppWL.w+r.oppWL.l}`:""}${r.oppRecentK!=null?`, recent K ${(r.oppRecentK*100).toFixed(1)}% vs ${((r.oppSeasonK||r.oppK)*100).toFixed(1)}% season`:""}`);
   if(r.vsOppLast) L.push(`Last time vs ${esc(r.oppAb)}: <b>${r.vsOppLast.k} K</b> (${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""})`);
   return `<div style="font-family:'JetBrains Mono';font-size:10px;line-height:1.7;color:var(--ink-dim);padding:8px 10px;background:rgba(127,127,127,.08);border-radius:6px;margin-top:4px">${L.map(x=>`<div>${x}</div>`).join("")}</div>`;
