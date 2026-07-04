@@ -2554,10 +2554,10 @@ function skipReason(r, c, mode, ctx){
 function recommendParlay(rows, nLegs, mode='stat'){
   const isQuality = r => r.pK>=QUAL_K;   // blended K rate only — no whiff bypass
   const isProven  = r => !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
-  // "Best stats" gate FIRST: only genuine, proven strikeout arms whose recent form supports the line
-  // are candidates for the suggestion (the Edge Board still lists everyone). THEN rank those real arms
-  // by the mode's currency — so Beat the Market = the biggest market GAPS among quality arms, not the
-  // biggest gaps period (which live on arms the market rightly fades, i.e. the junk we just filtered).
+  // STATS-ONLY suggestion: only genuine, proven strikeout arms whose recent form supports the line
+  // are candidates (the Edge Board still lists everyone). Then the double shortlist + model-confidence
+  // ranking below. mode='market' branches remain only as dead code from the retired edge lens —
+  // Kalshi prices are payout/reference, never a selection criterion.
   const pool = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5 && isQuality(r) && isProven(r));
   let cand = pool.map(r=>candFromRow(r, mode)).filter(c=>c.form.supported && !c.hot);
   if(!cand.length) return null;
