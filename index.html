@@ -2451,6 +2451,9 @@ const EV_MARGIN=0.07; // MARKET mode gate: model prob must beat the Kalshi mid b
 const STAT_STRONG=0.68; // STAT mode bar: model prob a leg must clear to be "strong" (market-independent)
 const FORM_MIN_N=4;   // need at least this many recent STARTS before recent form can veto a line
 const FORM_MIN_RATE=0.34; // and he must have actually reached the line in ≥ this share of them
+const QUAL_K=0.23;    // strong-leg quality floor: pitcher K rate/batter (league ~.22) …
+const QUAL_WHIFF=25;  // …or Statcast whiff% — either clears it; a contact arm fails both
+const QUAL_MIN_GS=5;  // and he needs a real sample this season (no 1–4 start call-ups)
 // recent-form reachability: how often he ACTUALLY hit a target line in his last up-to-10 starts.
 // This is the guardrail against the model over-projecting a mediocre arm and floating him up the
 // board on a fat-payout line his own recent starts say he never reaches. Unknown history (n<FORM_MIN_N)
@@ -2496,15 +2499,27 @@ function candFromRow(r, mode='market'){
     }
   }
   const form=formReach(r, best.target);   // recent reach AT the chosen line, for the verdict + display
-  // "strong" — stat mode: model prob ≥ STAT_STRONG; market mode: a real edge (or the ≥65% read with
-  // no price). In BOTH: recent starts must actually support the line, and the opponent isn't an
-  // early-exit risk. The form gate is what keeps over-projected mediocre arms off the board.
-  const strong = (mode==='stat'
-      ? best.p>=STAT_STRONG
-      : (best.edge!=null ? best.edge>=EV_MARGIN : best.p>=0.65)) && form.supported && !oppHot(r);
+  // Quality gates so a big market edge can't drag a non-strikeout arm onto the board:
+  //   · quality — he actually misses bats (K rate or Statcast whiff above average). A pitch-to-
+  //     contact starter (e.g. sub-23% K, sub-25% whiff) is never a K-parlay leg no matter the edge.
+  //   · proven  — a real track record this season (not a 1-3 start call-up the model overrates on
+  //     a tiny, whiff-inflated sample).
+  const quality = (r.pK>=QUAL_K) || (r.pWhiff!=null && r.pWhiff>=QUAL_WHIFF);
+  const proven  = !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
+  const base = mode==='stat' ? best.p>=STAT_STRONG
+             : (best.edge!=null ? best.edge>=EV_MARGIN : best.p>=0.65);
+  const strong = base && quality && proven && form.supported && !oppHot(r);
+  // the single most-disqualifying reason, for the soft tag + "why?" panel (most fundamental first)
+  const softReason = strong ? ""
+    : !proven      ? `unproven — only ${r.gamesStarted||0} start${(r.gamesStarted||0)===1?"":"s"} this season`
+    : !quality     ? `not a strikeout arm — ${r.pWhiff!=null?`${r.pWhiff.toFixed(0)}% whiff`:`${(r.pK*100).toFixed(0)}% K`}, contact profile`
+    : !form.supported ? `reached ${best.target}+ K in only ${form.hits} of his last ${form.n} starts`
+    : oppHot(r)    ? `early-exit risk (hot opponent)`
+    : mode==='stat'? `under the ${(STAT_STRONG*100)|0}% model-confidence bar`
+    : (best.edge!=null ? `edge under the ${(EV_MARGIN*100)|0}-pt bar — market prices him about right` : `under the 65% confidence bar`);
   return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target:best.target, line:best.target,
            p:best.p, pMarket:best.pMarket, edge:best.edge, dec:best.dec, live:best.live,
-           form, strong, hot:oppHot(r), mode, r };
+           form, quality, proven, strong, softReason, hot:oppHot(r), mode, r };
 }
 function recommendParlay(rows, nLegs, mode='market'){
   const eligible = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5);
@@ -2596,12 +2611,7 @@ function explainTarget(r, leagueK, mode='market'){
   else if(chosen) L.push(`${chosen}+ clears at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}%; ${nextT}+ is only ${(nextP*100).toFixed(0)}% — below the floor, so we don't stretch for it.`);
   else L.push(`Even 5+ sits under the 64% floor — not a play.`);
   if(priced) L.push(`Market: model <b>${(c.p*100).toFixed(0)}%</b> vs Kalshi <b>${(c.pMarket*100).toFixed(0)}%</b> → edge <b style="color:${c.edge>=EV_MARGIN?'var(--green)':c.edge>=0?'var(--amber)':'var(--red)'}">${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts</b> (${mode==='stat'?`reference only — this pick ignores the market`:`needs ≥${(EV_MARGIN*100)|0} to be strong`}).`);
-  const softWhy = !strong ? (
-      (c.form && !c.form.supported) ? `only reached ${c.target}+ K in ${c.form.hits} of his last ${c.form.n} starts`
-    : mode==='stat' ? (c.p<STAT_STRONG ? `under the ${(STAT_STRONG*100)|0}% confidence bar` : ``)
-    : (priced
-        ? (c.edge<EV_MARGIN ? `edge under the ${(EV_MARGIN*100)|0}-pt bar — market prices him about right` : ``)
-        : (c.p<0.65 ? `under the 65% confidence bar` : ``))) : ``;
+  const softWhy = strong ? `` : (c.softReason||``);
   L.push(`Verdict: <b style="color:${strong?'var(--green)':'var(--amber)'}">${strong?'STRONG':'soft'}</b>${softWhy?` — ${softWhy}`:''}${oppHot(r)?` · early-exit risk${r.oppStreak&&r.oppStreak.type==="W"&&r.oppStreak.n>=4?` (W${r.oppStreak.n})`:""}${r.momentumF!=null&&r.momentumF<0.97?`, hot bats may shorten the outing`:""}`:''}`);
   const mults=[];
   if(Math.abs((r.parkF||1)-1)>=0.005) mults.push(`park ${pctDelta(r.parkF)}`);
@@ -2690,7 +2700,8 @@ function kLadderHTML(l){
 function edgeBoardHTML(rows){
   const cands = rows.filter(r=>!r.bullpen && r.proj>=3).map(r=>({r, c:candFromRow(r)}));
   cands.sort((a,b)=>{
-    const ae=a.c.edge, be=b.c.edge;
+    if(a.c.strong!==b.c.strong) return a.c.strong?-1:1;   // real plays first — a big edge on a
+    const ae=a.c.edge, be=b.c.edge;                        // contact/unproven arm no longer floats up
     if(ae!=null && be!=null) return be-ae;      // both priced → biggest edge first
     if(ae!=null) return -1;                      // priced arms above unpriced
     if(be!=null) return 1;
@@ -2699,13 +2710,13 @@ function edgeBoardHTML(rows){
   const anyPriced=cands.some(x=>x.c.edge!=null);
   return `
   <div class="edgeboard">
-    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`model prob vs live Kalshi mid — biggest gaps up top · edge ≥ ${(EV_MARGIN*100)|0} pts is a real play`:"no live Kalshi prices yet — showing model probs; edge fills in when books open"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
+    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`real plays first, then biggest edge · dimmed = soft (contact/unproven/not reaching the line)`:"no live Kalshi prices yet — real plays first, then model prob; dimmed = soft"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
     <table class="ebtable">
       <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="model's best line: most model-vs-market edge that still clears the 64% floor">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
       <tbody>${cands.map(({r,c})=>{
         const eColor = c.edge==null?"var(--ink-faint)":c.edge>=EV_MARGIN?"var(--green)":c.edge>=0?"var(--amber)":"var(--red)";
-        return `<tr data-eb-pid="${r.id}" data-eb-game="${r.gamePk}" data-eb-name="${esc(r.name)}" data-eb-line="${c.target}" title="click to add ${esc(r.name)} ${c.target}+ K to the builder">
-          <td style="text-align:left">${esc(r.name)}${c.hot?' <span style="color:var(--amber);font-size:9px" title="early-exit risk">⚠️</span>':''}${r.pWhiff!=null?` <span style="color:var(--ink-faint);font-size:9px" title="whiff%">${r.pWhiff.toFixed(0)}%w</span>`:''}</td>
+        return `<tr data-eb-pid="${r.id}" data-eb-game="${r.gamePk}" data-eb-name="${esc(r.name)}" data-eb-line="${c.target}"${c.strong?'':' style="opacity:.5"'} title="${c.strong?`click to add ${esc(r.name)} ${c.target}+ K to the builder`:`soft — ${esc(c.softReason||"")} · click to add anyway`}">
+          <td style="text-align:left">${esc(r.name)}${c.strong?'':' <span style="color:var(--ink-faint);font-size:9px">soft</span>'}${c.hot?' <span style="color:var(--amber);font-size:9px" title="early-exit risk">⚠️</span>':''}${r.pWhiff!=null?` <span style="color:var(--ink-faint);font-size:9px" title="whiff%">${r.pWhiff.toFixed(0)}%w</span>`:''}</td>
           <td style="text-align:left;color:var(--ink-dim)">${esc(r.team)} v ${esc(r.oppAb)}</td>
           <td class="pj">${c.target}+</td>
           <td>${(c.p*100).toFixed(0)}%</td>
@@ -2752,7 +2763,7 @@ function renderKResults(rows, leagueK){
       </div>
       <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ${rec.dec.toFixed(2)}× payout</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
       <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
-      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="${l.form&&!l.form.supported?`soft — reached ${l.target}+ K in only ${l.form.hits} of his last ${l.form.n} starts`:l.hot?`soft — early-exit risk (hot opponent)`:l.mode==='stat'?`soft — under ${(STAT_STRONG*100)|0}% model confidence`:`soft — no real edge vs the market`}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
+      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="soft — ${esc(l.softReason||"")}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}</div>
     </div>
