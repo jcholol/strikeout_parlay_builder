@@ -2463,8 +2463,10 @@ const EV_MARGIN=0.07; // MARKET mode gate: model prob must beat the Kalshi mid b
 const STAT_STRONG=0.68; // STAT mode bar: model prob a leg must clear to be "strong" (market-independent)
 const FORM_MIN_N=4;   // need at least this many recent STARTS before recent form can veto a line
 const FORM_MIN_RATE=0.34; // and he must have actually reached the line in ≥ this share of them
-const QUAL_K=0.23;    // strong-leg quality floor: pitcher K rate/batter (league ~.22) …
-const QUAL_WHIFF=25;  // …or Statcast whiff% — either clears it; a contact arm fails both
+const QUAL_K=0.23;    // quality floor: blended K rate per batter (league ~.22). RESULTS-first — whiff
+                      // already feeds this rate via whiffBlend (small samples lean on stuff), so there
+                      // is deliberately NO separate whiff escape hatch: a 25%-whiff / 20%-K arm that
+                      // never converts stuff into strikeouts (the Kumar Rocker case) must not pass.
 const QUAL_MIN_GS=5;  // and he needs a real sample this season (no 1–4 start call-ups)
 const REC_SHORTLIST=7; // Beat-the-Market: shortlist the top-N matchups by projection, then pick by edge
                        // (7 so even a 5-leg parlay still picks the best gaps out of a wider matchup pool)
@@ -2518,7 +2520,7 @@ function candFromRow(r, mode='market'){
   //     contact starter (e.g. sub-23% K, sub-25% whiff) is never a K-parlay leg no matter the edge.
   //   · proven  — a real track record this season (not a 1-3 start call-up the model overrates on
   //     a tiny, whiff-inflated sample).
-  const quality = (r.pK>=QUAL_K) || (r.pWhiff!=null && r.pWhiff>=QUAL_WHIFF);
+  const quality = r.pK>=QUAL_K;   // blended K rate only — no whiff bypass (see QUAL_K note)
   const proven  = !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
   const base = mode==='stat' ? best.p>=STAT_STRONG
              : (best.edge!=null ? best.edge>=EV_MARGIN : best.p>=0.65);
@@ -2526,7 +2528,7 @@ function candFromRow(r, mode='market'){
   // the single most-disqualifying reason, for the soft tag + "why?" panel (most fundamental first)
   const softReason = strong ? ""
     : !proven      ? `unproven — only ${r.gamesStarted||0} start${(r.gamesStarted||0)===1?"":"s"} this season`
-    : !quality     ? `not a strikeout arm — ${r.pWhiff!=null?`${r.pWhiff.toFixed(0)}% whiff`:`${(r.pK*100).toFixed(0)}% K`}, contact profile`
+    : !quality     ? `not a strikeout arm — K rate ${(r.pK*100).toFixed(1)}% under the ${(QUAL_K*100)|0}% bar${r.pWhiff!=null?` (${r.pWhiff.toFixed(0)}% whiff doesn't convert)`:``}`
     : !form.supported ? `reached ${best.target}+ K in only ${form.hits} of his last ${form.n} starts`
     : oppHot(r)    ? `early-exit risk (hot opponent)`
     : mode==='stat'? `under the ${(STAT_STRONG*100)|0}% model-confidence bar`
@@ -2537,7 +2539,7 @@ function candFromRow(r, mode='market'){
 }
 // why a higher-projected arm didn't make the suggestion — the single most-disqualifying reason
 function skipReason(r, c, mode, ctx){
-  if(!c.quality)        return `contact profile — ${r.pWhiff!=null?`${r.pWhiff.toFixed(0)}% whiff`:`${(r.pK*100).toFixed(0)}% K`}, not a K arm`;
+  if(!c.quality)        return `K rate ${(r.pK*100).toFixed(1)}% — under the ${(QUAL_K*100)|0}% quality bar${r.pWhiff!=null?` (${r.pWhiff.toFixed(0)}% whiff doesn't convert)`:``}`;
   if(!c.proven)         return `unproven — only ${r.gamesStarted||0} start${(r.gamesStarted||0)===1?'':'s'} this season`;
   if(c.hot)             return `early-exit risk — hot opponent may shorten the outing`;
   if(!c.form.supported) return `hasn't reached ${c.target}+ K lately (${c.form.hits} of last ${c.form.n} starts)`;
@@ -2547,7 +2549,7 @@ function skipReason(r, c, mode, ctx){
                         : `smaller market gap (${c.edge!=null?`${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts`:`no live price`})`;
 }
 function recommendParlay(rows, nLegs, mode='market'){
-  const isQuality = r => (r.pK>=QUAL_K) || (r.pWhiff!=null && r.pWhiff>=QUAL_WHIFF);
+  const isQuality = r => r.pK>=QUAL_K;   // blended K rate only — no whiff bypass
   const isProven  = r => !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
   // "Best stats" gate FIRST: only genuine, proven strikeout arms whose recent form supports the line
   // are candidates for the suggestion (the Edge Board still lists everyone). THEN rank those real arms
