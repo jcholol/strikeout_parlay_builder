@@ -481,6 +481,18 @@
   .modebtn:hover{border-color:var(--amber-dim);color:var(--chalk)}
   .modebtn.active{background:var(--amber);border-color:var(--amber);color:var(--on-amber);box-shadow:var(--glow-amber)}
   .krec-modenote{font-family:"JetBrains Mono";font-size:10px;letter-spacing:.3px;color:var(--ink-faint)}
+  .krec-rank{font-family:"JetBrains Mono";font-size:10px;font-weight:700;color:var(--ink-faint);background:rgba(127,127,127,.12);border-radius:5px;padding:0 5px;vertical-align:middle}
+  /* selection funnel — explains the suggestion vs the projection-sorted ranking */
+  .krec-funnel{margin:6px 0 10px;font-family:"JetBrains Mono";font-size:11px}
+  .krec-funnel summary{cursor:pointer;color:var(--ink-dim);letter-spacing:.3px;list-style:none}
+  .krec-funnel summary::-webkit-details-marker{display:none}
+  .krec-funnel summary:hover{color:var(--amber)}
+  .krec-funnel .fn-body{padding:9px 11px;margin-top:6px;background:rgba(127,127,127,.06);border:1px solid var(--line);border-radius:8px;line-height:1.6;color:var(--ink-dim)}
+  .krec-funnel .fn-body b{color:var(--chalk);font-weight:700}
+  .krec-funnel .fn-note{color:var(--ink-faint);margin-top:6px;font-size:10px;line-height:1.5}
+  .krec-funnel .fn-cut-h{margin-top:9px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.7px;font-size:9px}
+  .krec-funnel .fn-cut{color:var(--ink-dim);margin-top:2px}
+  .krec-funnel .fn-cut b{color:var(--ink);font-weight:600}
   .krec-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
   .krec-warn{font-family:"JetBrains Mono";font-size:10px;color:var(--red)}
   .krec-sub{font-family:"JetBrains Mono";font-size:10px;color:var(--ink-faint);margin-bottom:9px;letter-spacing:.3px}
@@ -2523,6 +2535,15 @@ function candFromRow(r, mode='market'){
            p:best.p, pMarket:best.pMarket, edge:best.edge, dec:best.dec, live:best.live,
            form, quality, proven, strong, softReason, hot:oppHot(r), mode, r };
 }
+// why a higher-projected arm didn't make the suggestion — the single most-disqualifying reason
+function skipReason(r, c, mode){
+  if(!c.quality)        return `contact profile — ${r.pWhiff!=null?`${r.pWhiff.toFixed(0)}% whiff`:`${(r.pK*100).toFixed(0)}% K`}, not a K arm`;
+  if(!c.proven)         return `unproven — only ${r.gamesStarted||0} start${(r.gamesStarted||0)===1?'':'s'} this season`;
+  if(c.hot)             return `early-exit risk — hot opponent may shorten the outing`;
+  if(!c.form.supported) return `hasn't reached ${c.target}+ K lately (${c.form.hits} of last ${c.form.n} starts)`;
+  return mode==='stat'  ? `lower model confidence (${(c.p*100).toFixed(0)}% at ${c.target}+)`
+                        : `smaller market gap (${c.edge!=null?`${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts`:`no live price`})`;
+}
 function recommendParlay(rows, nLegs, mode='market'){
   const isQuality = r => (r.pK>=QUAL_K) || (r.pWhiff!=null && r.pWhiff>=QUAL_WHIFF);
   const isProven  = r => !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
@@ -2568,7 +2589,19 @@ function recommendParlay(rows, nLegs, mode='market'){
     else if(avgEdge>=0){ verdict="LEAN"; reason=`top matchups with thin edges (${edgeTxt}) — market prices them close to the model`; }
     else { verdict="LEAN"; reason=`top matchups, but the market prices them above the model (${edgeTxt}) — best value available, no real edge today`; }
   }
-  return { legs, combined, dec, american: decToAm(dec), strongCount, avgEdge, priced, mode, verdict, reason, shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
+  // Selection funnel — so the suggestion isn't a black box vs the projection-sorted Ranking table.
+  // Tag each leg with its table rank, and list the arms that OUT-PROJECTED the weakest pick but were
+  // skipped, each with the reason. This is what answers "why a rank-#12 guy and not #1–#11?".
+  legs.forEach(l=>{ l.rank = rows.indexOf(l.r)+1; });
+  const pickSet=new Set(legs.map(l=>l.r));
+  const worstPickProj = legs.length ? Math.min(...legs.map(l=>l.proj)) : 0;
+  const considered = rows.filter(r=>!r.bullpen && r.proj>=5);
+  const skipped = considered
+    .filter(r=>!pickSet.has(r) && r.proj>=worstPickProj)      // ranked at/above the weakest pick
+    .map(r=>({ name:r.name, rank:rows.indexOf(r)+1, reason:skipReason(r, candFromRow(r,mode), mode) }))
+    .sort((a,b)=>a.rank-b.rank).slice(0,6);
+  const funnel = { considered:considered.length, qualified:cand.length, shortlisted: shortlist?shortlist.length:null, picked:legs.length, skipped };
+  return { legs, combined, dec, american: decToAm(dec), strongCount, avgEdge, priced, mode, verdict, reason, funnel, shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
 }
 
 function buildRecommendedParlay(legs){
@@ -2767,7 +2800,14 @@ function renderKResults(rows, leagueK){
       </div>
       <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ${rec.dec.toFixed(2)}× payout</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
       <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
-      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="soft — ${esc(l.softReason||"")}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
+      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.rank?` <span class="krec-rank" title="rank in the projection-sorted Pitcher Ranking below">#${l.rank}</span>`:''}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="soft — ${esc(l.softReason||"")}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
+      ${rec.funnel ? (()=>{ const f=rec.funnel; return `<details class="krec-funnel">
+        <summary>ℹ️ Why these picks, not the top of the ranking?</summary>
+        <div class="fn-body">
+          <div><b>${f.considered}</b> arms on the slate → <b>${f.qualified}</b> passed the quality + proven + recent-form gate${f.shortlisted!=null?` → top <b>${f.shortlisted}</b> by projection → <b>${f.picked}</b> biggest market gaps`:` → top <b>${f.picked}</b> by model confidence`}.</div>
+          <div class="fn-note">The Pitcher Ranking is sorted by raw projection (every arm). The suggestion filters that list first — so contact arms, unproven call-ups, hot-opponent spots, and pitchers not reaching the line lately drop out. That's why a lower-ranked arm can be a top pick.</div>
+          ${f.skipped.length?`<div class="fn-cut-h">Projected higher but skipped</div>${f.skipped.map(s=>`<div class="fn-cut">#${s.rank} <b>${esc(s.name)}</b> — ${esc(s.reason)}</div>`).join("")}`:``}
+        </div></details>`;})() : ``}
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       `;})() : `<div class="krec-sub">🛑 SKIP — no proven strikeout arm on this slate clears the quality + recent-form bar. The Edge Board below still lists every arm if you want to override.</div>`}</div>
     </div>
