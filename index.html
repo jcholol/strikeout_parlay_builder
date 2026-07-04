@@ -2522,47 +2522,39 @@ function candFromRow(r, mode='market'){
            form, quality, proven, strong, softReason, hot:oppHot(r), mode, r };
 }
 function recommendParlay(rows, nLegs, mode='market'){
-  const eligible = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5);
-  // every eligible arm is a candidate; we show the best ones even when they're soft, so the SKIP
-  // signal still reveals what was considered.
-  let cand=eligible.map(r=>candFromRow(r, mode));
+  const isQuality = r => (r.pK>=QUAL_K) || (r.pWhiff!=null && r.pWhiff>=QUAL_WHIFF);
+  const isProven  = r => !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
+  // "Best stats" gate FIRST: only genuine, proven strikeout arms whose recent form supports the line
+  // are candidates for the suggestion (the Edge Board still lists everyone). THEN rank those real arms
+  // by the mode's currency — so Beat the Market = the biggest market GAPS among quality arms, not the
+  // biggest gaps period (which live on arms the market rightly fades, i.e. the junk we just filtered).
+  const pool = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5 && isQuality(r) && isProven(r));
+  let cand = pool.map(r=>candFromRow(r, mode)).filter(c=>c.form.supported && !c.hot);
   if(!cand.length) return null;
-  // rank: strong arms first, then by the mode's own currency — market ranks by edge (biggest gaps
-  // up top), stat ranks by raw model probability (most confident up top) — then projection.
-  if(mode==='stat') cand.sort((a,b)=> b.strong-a.strong || b.p-a.p || b.proj-a.proj);
-  else cand.sort((a,b)=> b.strong-a.strong || ((b.edge??-9)-(a.edge??-9)) || b.proj-a.proj || b.dec-a.dec);
+  if(mode==='stat') cand.sort((a,b)=> b.p-a.p || b.proj-a.proj);                 // most confident first
+  else cand.sort((a,b)=> ((b.edge??-9)-(a.edge??-9)) || b.p-a.p);                // biggest gap first, then confidence
   const combDec = ls=>ls.reduce((a,c)=>a*c.dec,1);
   const combP   = ls=>ls.reduce((a,c)=>a*c.p,1);
-  let legs;
-  if(nLegs){
-    legs = cand.slice(0, Math.min(nLegs, cand.length));  // user picked the leg count
-  } else {
-    // auto: strong legs only, cap at 3. Leg count is a variance dial, not an edge dial, so we don't
-    // pad toward a payout target.
-    legs = cand.filter(c=>c.strong).slice(0,3);
-    if(!legs.length) legs = cand.slice(0,1);
-  }
+  const legs = cand.slice(0, Math.min(nLegs || 3, cand.length));   // top quality arms by the mode's currency
   const dec=combDec(legs), combined=combP(legs);
   const n=legs.length, strongCount=legs.filter(l=>l.strong).length;
   const priced=legs.some(l=>l.edge!=null);
   const eLegs=legs.filter(l=>l.edge!=null);
   const avgEdge=eLegs.length ? eLegs.reduce((a,c)=>a+c.edge,0)/eLegs.length : null;
-  const edgeTxt = avgEdge!=null ? `avg +${(avgEdge*100).toFixed(0)} pts vs market` : "";
+  const edgeTxt = avgEdge!=null ? `${avgEdge>=0?'+':''}${(avgEdge*100).toFixed(0)} pts avg vs market` : "";
   let verdict, reason;
   if(mode==='stat'){
-    // verdict on model conviction alone — market prices are ignored (shown for reference only)
     const bar=(STAT_STRONG*100)|0;
-    if(strongCount===0){ verdict="SKIP"; reason=`no leg clears ${bar}% model confidence — thin slate, consider skipping`; }
-    else if(strongCount===n && n>=2){ verdict="GO"; reason=`all ${n} legs ≥${bar}% on the model — ${(combined*100).toFixed(0)}% to sweep`; }
-    else if(strongCount>=2){ verdict="LEAN"; reason=`${strongCount}/${n} legs ≥${bar}% — drop the ${n-strongCount} softer or stake small`; }
-    else { verdict="LEAN"; reason=`only 1 leg ≥${bar}% confidence — lean small or pass`; }
+    if(strongCount===n && n>=2){ verdict="GO"; reason=`all ${n} quality arms ≥${bar}% on the model — ${(combined*100).toFixed(0)}% to sweep`; }
+    else if(strongCount>=1){ verdict="LEAN"; reason=`${strongCount}/${n} ≥${bar}%; the rest are quality but lower-confidence — trim or stake small`; }
+    else { verdict="LEAN"; reason=`the board's best quality arms, but all under ${bar}% — single leg or small stake`; }
+  } else if(!priced){
+    verdict="LEAN"; reason=`top quality arms by projection — no live Kalshi prices yet, so the gap is TBD (load a slate for prices)`;
   } else {
-    // verdict on edge: "strong" means a real edge vs the price; with no live prices it falls back to
-    // the ≥65% confidence read.
-    if(strongCount===0){ verdict="SKIP"; reason = priced ? `no leg beats the market by ≥${(EV_MARGIN*100)|0} pts — skip today` : `no leg clears 65% against a cold matchup — consider skipping`; }
-    else if(strongCount===n && n>=2){ verdict="GO"; reason = priced ? `all ${n} legs beat the market (${edgeTxt}) — ${(combined*100).toFixed(0)}% to sweep` : `all ${n} legs strong — ${(combined*100).toFixed(0)}% to sweep`; }
-    else if(strongCount>=2){ verdict="LEAN"; reason=`${strongCount}/${n} legs ${priced?"have edge":"strong"} — drop the ${n-strongCount} without it or stake small`; }
-    else { verdict="LEAN"; reason=`only 1 leg ${priced?"beats the market":"is strong"} — lean small or pass`; }
+    if(strongCount===n && n>=2){ verdict="GO"; reason=`all ${n} beat the market (${edgeTxt}) — best gaps among quality arms, ${(combined*100).toFixed(0)}% to sweep`; }
+    else if(strongCount>=1){ verdict="LEAN"; reason=`${strongCount}/${n} clear the ${(EV_MARGIN*100)|0}-pt edge bar (${edgeTxt}) — best gaps among quality arms`; }
+    else if(avgEdge>=0){ verdict="LEAN"; reason=`quality arms with thin edges (${edgeTxt}) — market prices them close to the model; the best available gaps`; }
+    else { verdict="LEAN"; reason=`quality arms, but the market prices them above the model (${edgeTxt}) — no value edge today, best gaps shown`; }
   }
   return { legs, combined, dec, american: decToAm(dec), strongCount, avgEdge, priced, mode, verdict, reason, shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
 }
@@ -2749,9 +2741,9 @@ function renderKResults(rows, leagueK){
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
       <div class="krec-modes">
-        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Rank & pick legs by the biggest edge over the live Kalshi price — value bets. 'Strong' = beats the market by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
-        <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Rank & pick legs by pure model confidence, ignoring the market. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Doesn't have to beat the price.">💪 Best on Stats</button>
-        <span class="krec-modenote">${recMode==="stat"?`most confident model plays — market ignored (shown for reference)`:`biggest value vs the live Kalshi price`}</span>
+        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Only proven strikeout arms (quality + recent form), ranked by the biggest market GAP — best value up top. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
+        <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Only proven strikeout arms (quality + recent form), ranked by model confidence. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored.">💪 Best on Stats</button>
+        <span class="krec-modenote">${recMode==="stat"?`quality arms, ranked by model confidence`:`quality arms, ranked by market gap — best value up top`}</span>
       </div>
       <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
@@ -2765,7 +2757,7 @@ function renderKResults(rows, leagueK){
       <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
       <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="soft — ${esc(l.softReason||"")}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
-      `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}</div>
+      `;})() : `<div class="krec-sub">🛑 SKIP — no proven strikeout arm on this slate clears the quality + recent-form bar. The Edge Board below still lists every arm if you want to override.</div>`}</div>
     </div>
     ${edgeBoardHTML(rows)}
     <div class="sec-head" data-sec-head="krank"><span class="sec-title">📋 Pitcher Ranking <span class="sec-count">${rows.length} arm${rows.length!==1?"s":""}</span></span><button class="collapse-btn sec-toggle" title="Collapse / expand the ranking" aria-label="Collapse section"><span class="chev">▾</span></button></div>
