@@ -515,6 +515,7 @@
   .krank td:nth-child(2){text-align:left;font-family:"Oswald";font-size:14px;font-weight:600;color:var(--chalk)}
   .krank tr:hover td{background:rgba(255,255,255,.02)}
   .krank .pj{color:var(--amber);font-weight:700}
+  .krank-rk{font-family:"JetBrains Mono";font-size:9px;font-weight:700;color:var(--amber);letter-spacing:.3px;background:rgba(255,182,39,.12);border:1px solid var(--amber-dim);border-radius:5px;padding:1px 5px;vertical-align:middle;white-space:nowrap}
   .krank .p6{color:var(--green)}
   .kbadge{display:inline-block;font-family:"JetBrains Mono";font-size:9px;letter-spacing:.5px;background:rgba(255,182,39,.12);border:1px solid var(--amber-dim);color:var(--amber);border-radius:5px;padding:2px 6px;margin-left:6px}
   .kbadge.lead{background:var(--amber);color:#1a1203;font-weight:700}
@@ -2303,12 +2304,7 @@ function pitcherNote(r){
   if(r.pWhiff!=null) tags.push(`${r.pWhiff.toFixed(0)}% whiff${r.pWhiff>=32?" 🔥":r.pWhiff<22?" ⚠️soft":""}`);
   const ipN=ipToNum(r.ip);
   if(ipN>=10 && r.so){ const k9=r.so/ipN*9; tags.push(`${k9>=11?Math.round(k9)+"+":k9.toFixed(1)} K/9`); }
-  if(r.lgRank){
-    if(r.lgRank.mlbRank===1) tags.push("MLB K leader");
-    else if(r.lgRank.lgRank===1) tags.push(`${lgAbbr(r.lgRank.lgName)} K leader`);
-    else if(r.lgRank.mlbRank<=10) tags.push(`#${r.lgRank.mlbRank} MLB K`);
-    else if(r.lgRank.lgRank<=15) tags.push(`#${r.lgRank.lgRank} ${lgAbbr(r.lgRank.lgName)} K`);
-  }
+  // (MLB/league K rank moved next to the pitcher's name in the ranking table — no longer duplicated here)
   if(r.gamesStarted>0){ const kPer=r.so/r.gamesStarted; if(kPer) tags.push(`${kPer.toFixed(1)} K/start`); }
   const last=r.l5&&r.l5.length?r.l5[r.l5.length-1].k:null;
   if(last!=null && last>=9) tags.push(`${last} K last out 🔥`);
@@ -2608,21 +2604,20 @@ function renderKResults(rows, leagueK){
     <div class="sec-head" data-sec-head="krank"><span class="sec-title">📋 Pitcher Ranking <span class="sec-count">${rows.length} arm${rows.length!==1?"s":""}</span></span><button class="collapse-btn sec-toggle" title="Collapse / expand the ranking" aria-label="Collapse section"><span class="chev">▾</span></button></div>
     <div class="krank-sec">
     <table class="krank">
-      <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th title="strikeouts in his last up-to-5 starts (most recent last)">L5 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th title="MLB strikeout rank${mlbTotal?` among ${mlbTotal} qualified pitchers`:""}">K Rk${mlbTotal?` <span style="color:var(--ink-faint)">/${mlbTotal}</span>`:""}</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
+      <thead><tr><th>#</th><th>Pitcher</th><th>Matchup</th><th title="strikeouts in his last up-to-5 starts (most recent last)">L5 K</th><th title="Pitcher side — his strikeouts / innings / K-rate per batter, handedness">Pitcher · SO/IP/K%</th><th title="Lineup side — opposing lineup's K-rate (vs this pitcher's hand) vs league, plus park & weather">Opp Lineup K%</th><th>Proj K</th><th>5+</th><th>6+</th><th>7+</th></tr></thead>
       <tbody>${rows.map((r,i)=>`<tr data-pid="${r.id}" data-game="${r.gamePk}" data-name="${esc(r.name)}">
         <td>${i+1}</td>
-        <td>${esc(r.name)} <button class="info-btn" data-info="${r.id}-${r.gamePk}" title="why this target?" style="background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:50%;width:16px;height:16px;line-height:1;font-size:10px;cursor:pointer;padding:0">ⓘ</button>${r.bullpen?` <span class="flag bullpen" title="reliever/opener — likely a bullpen game, short outing">🪣 BULLPEN GAME</span>`:r.thin?` <span class="flag thin" title="real starter with few games (injury/call-up) — smaller sample">thin data</span>`:""}${(r.workFlags||[]).map(f=>` <span class="flag work" title="workload signal from recent game logs (not a news feed)">${esc(f)}</span>`).join("")}${r.ilBackDays!=null&&r.ilBackDays<=30?` <span class="flag il" title="days since activated from the injured list — may be on a pitch/innings limit">IL ${r.ilBackDays}d${r.startsSince!=null?` · ${r.startsSince} GS`:""}</span> <span class="flag out" title="length of the IL stint and the injury">${r.ilDaysOut!=null?`${r.ilDaysOut}d`:"?"} · ${r.ilReason?esc(r.ilReason):"reason n/a"}</span>`:""}</td>
+        <td>${esc(r.name)}${r.lgRank?` <span class="krank-rk" title="MLB strikeout rank${mlbTotal?` of ${mlbTotal} qualified pitchers`:""}${r.lgRank.lgName?` · #${r.lgRank.lgRank} ${esc(lgAbbr(r.lgRank.lgName))}`:""}">#${r.lgRank.mlbRank}${r.lgRank.mlbRank===1?" K":r.lgRank.lgRank===1?` ${esc(lgAbbr(r.lgRank.lgName))}`:""}</span>`:""} <button class="info-btn" data-info="${r.id}-${r.gamePk}" title="why this target?" style="background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:50%;width:16px;height:16px;line-height:1;font-size:10px;cursor:pointer;padding:0">ⓘ</button>${r.bullpen?` <span class="flag bullpen" title="reliever/opener — likely a bullpen game, short outing">🪣 BULLPEN GAME</span>`:r.thin?` <span class="flag thin" title="real starter with few games (injury/call-up) — smaller sample">thin data</span>`:""}${(r.workFlags||[]).map(f=>` <span class="flag work" title="workload signal from recent game logs (not a news feed)">${esc(f)}</span>`).join("")}${r.ilBackDays!=null&&r.ilBackDays<=30?` <span class="flag il" title="days since activated from the injured list — may be on a pitch/innings limit">IL ${r.ilBackDays}d${r.startsSince!=null?` · ${r.startsSince} GS`:""}</span> <span class="flag out" title="length of the IL stint and the injury">${r.ilDaysOut!=null?`${r.ilDaysOut}d`:"?"} · ${r.ilReason?esc(r.ilReason):"reason n/a"}</span>`:""}</td>
         <td style="text-align:left;font-family:'JetBrains Mono';font-size:11px;color:var(--ink-dim)">${esc(r.team)} v ${esc(r.oppAb)}<div class="cell-note" style="margin-left:0">${esc(r.startTime||"")}${r.umpire?` · HP ${esc(r.umpire.split(" ").slice(-1)[0])}`:""}</div></td>
         <td style="font-family:'JetBrains Mono';font-size:11px;color:var(--chalk)">${r.l5&&r.l5.length?r.l5.map(g=>`${g.k} ${g.home?"v":"@"}${esc(g.opp)}`).join(" · "):"–"}</td>
         <td style="font-family:'JetBrains Mono';font-size:11px">${r.so} / ${esc(String(r.ip))} / ${(r.pK*100).toFixed(1)}%${(()=>{const t=pitcherNote(r);return t.length?`<div class="cell-note">${t.map(esc).join(" · ")}</div>`:"";})()}</td>
         ${(()=>{const ln=lineupNote(r,leagueK);return `<td style="font-family:'JetBrains Mono';font-size:11px;color:${r.oppK>=leagueK?'var(--green)':'var(--red)'}" title="opposing lineup K-rate${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%">${(r.oppK*100).toFixed(1)}% <span style="color:var(--ink-faint)">${r.oppK>=leagueK?"▲":"▼"}${(Math.abs(r.oppK-leagueK)*100).toFixed(1)}</span>${ln.favorable?' ✅':''}<div class="cell-note">${ln.tags.map(esc).join(" · ")}</div></td>`;})()}
-        <td style="font-family:'JetBrains Mono';font-size:11px" title="${r.lgRank?esc(r.lgRank.lgName):""}">${r.lgRank?`<span class="pj">#${r.lgRank.mlbRank}</span> <span style="color:var(--ink-faint)">#${r.lgRank.lgRank} ${esc(lgAbbr(r.lgRank.lgName))}</span>`:"–"}</td>
         <td class="pj">${r.proj.toFixed(1)}</td>
         <td>${(poissonGE(r.proj,5)*100).toFixed(0)}%</td>
         <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%</td>
         <td>${(poissonGE(r.proj,7)*100).toFixed(0)}%</td>
       </tr>
-      <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="11" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
+      <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="10" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
       log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload & opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
