@@ -2536,11 +2536,13 @@ function candFromRow(r, mode='market'){
            form, quality, proven, strong, softReason, hot:oppHot(r), mode, r };
 }
 // why a higher-projected arm didn't make the suggestion — the single most-disqualifying reason
-function skipReason(r, c, mode){
+function skipReason(r, c, mode, ctx){
   if(!c.quality)        return `contact profile — ${r.pWhiff!=null?`${r.pWhiff.toFixed(0)}% whiff`:`${(r.pK*100).toFixed(0)}% K`}, not a K arm`;
   if(!c.proven)         return `unproven — only ${r.gamesStarted||0} start${(r.gamesStarted||0)===1?'':'s'} this season`;
   if(c.hot)             return `early-exit risk — hot opponent may shorten the outing`;
   if(!c.form.supported) return `hasn't reached ${c.target}+ K lately (${c.form.hits} of last ${c.form.n} starts)`;
+  if(ctx && !ctx.armTopR.has(r))     return `matchup-inflated — not a top-${ctx.N} arm on this slate (K ${(r.pK*100).toFixed(1)}%${r.pWhiff!=null?`, ${r.pWhiff.toFixed(0)}% whiff`:``})`;
+  if(ctx && !ctx.matchupTopR.has(r)) return `top arm, but not a top-${ctx.N} matchup today`;
   return mode==='stat'  ? `lower model confidence (${(c.p*100).toFixed(0)}% at ${c.target}+)`
                         : `smaller market gap (${c.edge!=null?`${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts`:`no live price`})`;
 }
@@ -2557,18 +2559,20 @@ function recommendParlay(rows, nLegs, mode='market'){
   const combDec = ls=>ls.reduce((a,c)=>a*c.dec,1);
   const combP   = ls=>ls.reduce((a,c)=>a*c.p,1);
   const want = nLegs || 3;
-  let legs, shortlist=null;
-  if(mode==='stat'){
-    cand.sort((a,b)=> b.p-a.p || b.proj-a.proj);                    // most confident first
-    legs = cand.slice(0, Math.min(want, cand.length));
-  } else {
-    // BALANCE (market): shortlist the top matchups by projection (real strikeout outlook), THEN take
-    // the biggest market gaps within that shortlist — so an edge is only chased on a genuinely good
-    // matchup, never on a marginal arm that merely slipped past the quality gate.
-    shortlist = cand.slice().sort((a,b)=> b.proj-a.proj || b.p-a.p).slice(0, Math.min(Math.max(REC_SHORTLIST, want), cand.length));
-    shortlist.sort((a,b)=> ((b.edge??-9)-(a.edge??-9)) || b.p-a.p);  // biggest gap within the shortlist
-    legs = shortlist.slice(0, Math.min(want, shortlist.length));
-  }
+  const N = Math.max(REC_SHORTLIST, want);
+  // DOUBLE shortlist — a pick must clear BOTH ranks:
+  //   · matchup rank — the projection (his stuff vs THIS lineup, park, weather, form…)
+  //   · arm rank     — intrinsic K talent only (blended K rate, whiff tiebreak), matchup-blind.
+  // A soft lineup inflates a middling arm's projection; requiring top-N on the arm rank too means a
+  // nobody can never ride a juicy matchup into the parlay — elite arms only, in good spots.
+  const armScore = c => (c.r.pK||0) + (c.r.pWhiff||0)/1e4;
+  const matchupTop = new Set(cand.slice().sort((a,b)=> b.proj-a.proj || b.p-a.p).slice(0, N));
+  const armTop     = new Set(cand.slice().sort((a,b)=> armScore(b)-armScore(a)).slice(0, N));
+  let shortlist = cand.filter(c=> matchupTop.has(c) && armTop.has(c));
+  if(!shortlist.length) return null;
+  if(mode==='stat') shortlist.sort((a,b)=> b.p-a.p || b.proj-a.proj);            // most confident first
+  else shortlist.sort((a,b)=> ((b.edge??-9)-(a.edge??-9)) || b.p-a.p);           // biggest gap first
+  const legs = shortlist.slice(0, Math.min(want, shortlist.length));
   const dec=combDec(legs), combined=combP(legs);
   const n=legs.length, strongCount=legs.filter(l=>l.strong).length;
   const priced=legs.some(l=>l.edge!=null);
@@ -2596,11 +2600,12 @@ function recommendParlay(rows, nLegs, mode='market'){
   const pickSet=new Set(legs.map(l=>l.r));
   const worstPickProj = legs.length ? Math.min(...legs.map(l=>l.proj)) : 0;
   const considered = rows.filter(r=>!r.bullpen && r.proj>=5);
+  const ctx = { armTopR:new Set([...armTop].map(c=>c.r)), matchupTopR:new Set([...matchupTop].map(c=>c.r)), N };
   const skipped = considered
     .filter(r=>!pickSet.has(r) && r.proj>=worstPickProj)      // ranked at/above the weakest pick
-    .map(r=>({ name:r.name, rank:rows.indexOf(r)+1, reason:skipReason(r, candFromRow(r,mode), mode) }))
+    .map(r=>({ name:r.name, rank:rows.indexOf(r)+1, reason:skipReason(r, candFromRow(r,mode), mode, ctx) }))
     .sort((a,b)=>a.rank-b.rank).slice(0,6);
-  const funnel = { considered:considered.length, qualified:cand.length, shortlisted: shortlist?shortlist.length:null, picked:legs.length, skipped };
+  const funnel = { considered:considered.length, qualified:cand.length, shortlisted:shortlist.length, N, picked:legs.length, skipped };
   return { legs, combined, dec, american: decToAm(dec), strongCount, avgEdge, priced, mode, verdict, reason, funnel, shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
 }
 
@@ -2786,9 +2791,9 @@ function renderKResults(rows, leagueK){
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
       <div class="krec-modes">
-        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Balance: shortlist the top ${REC_SHORTLIST} matchups by projection (proven quality + recent form), then pick the biggest market GAPS within that shortlist. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
-        <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Only proven strikeout arms (quality + recent form), ranked by model confidence. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored.">💪 Best on Stats</button>
-        <span class="krec-modenote">${recMode==="stat"?`quality arms, ranked by model confidence`:`top ${REC_SHORTLIST} matchups by projection, then the biggest market gaps`}</span>
+        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Must clear BOTH doors: a top-${REC_SHORTLIST} matchup (projection) AND a top-${REC_SHORTLIST} arm (his own K talent) — then the biggest market GAPS win. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
+        <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Same double shortlist (top matchups ∩ top arms), ranked by model confidence instead of price. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored.">💪 Best on Stats</button>
+        <span class="krec-modenote">${recMode==="stat"?`top matchups ∩ top arms, ranked by model confidence`:`top matchups ∩ top arms, ranked by market gap`}</span>
       </div>
       <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
@@ -2804,8 +2809,8 @@ function renderKResults(rows, leagueK){
       ${rec.funnel ? (()=>{ const f=rec.funnel; return `<details class="krec-funnel">
         <summary>ℹ️ Why these picks, not the top of the ranking?</summary>
         <div class="fn-body">
-          <div><b>${f.considered}</b> arms on the slate → <b>${f.qualified}</b> passed the quality + proven + recent-form gate${f.shortlisted!=null?` → top <b>${f.shortlisted}</b> by projection → <b>${f.picked}</b> biggest market gaps`:` → top <b>${f.picked}</b> by model confidence`}.</div>
-          <div class="fn-note">The Pitcher Ranking is sorted by raw projection (every arm). The suggestion filters that list first — so contact arms, unproven call-ups, hot-opponent spots, and pitchers not reaching the line lately drop out. That's why a lower-ranked arm can be a top pick.</div>
+          <div><b>${f.considered}</b> arms on the slate → <b>${f.qualified}</b> passed the quality + proven + recent-form gate → <b>${f.shortlisted}</b> in BOTH the top ${f.N} matchups <i>and</i> the top ${f.N} arms → <b>${f.picked}</b> by ${rec.mode==='stat'?'model confidence':'biggest market gap'}.</div>
+          <div class="fn-note">The Pitcher Ranking is sorted by raw projection (every arm). The suggestion needs both doors: a top matchup AND a top arm by his own K talent — so a middling pitcher gifted a soft lineup can't ride the matchup into the parlay, and junk (contact arms, unproven call-ups, cold form) is out entirely.</div>
           ${f.skipped.length?`<div class="fn-cut-h">Projected higher but skipped</div>${f.skipped.map(s=>`<div class="fn-cut">#${s.rank} <b>${esc(s.name)}</b> — ${esc(s.reason)}</div>`).join("")}`:``}
         </div></details>`;})() : ``}
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
