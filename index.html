@@ -2454,6 +2454,7 @@ const FORM_MIN_RATE=0.34; // and he must have actually reached the line in ≥ t
 const QUAL_K=0.23;    // strong-leg quality floor: pitcher K rate/batter (league ~.22) …
 const QUAL_WHIFF=25;  // …or Statcast whiff% — either clears it; a contact arm fails both
 const QUAL_MIN_GS=5;  // and he needs a real sample this season (no 1–4 start call-ups)
+const REC_SHORTLIST=5; // Beat-the-Market: shortlist the top-N matchups by projection, then pick by edge
 // recent-form reachability: how often he ACTUALLY hit a target line in his last up-to-10 starts.
 // This is the guardrail against the model over-projecting a mediocre arm and floating him up the
 // board on a fat-payout line his own recent starts say he never reaches. Unknown history (n<FORM_MIN_N)
@@ -2531,11 +2532,21 @@ function recommendParlay(rows, nLegs, mode='market'){
   const pool = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5 && isQuality(r) && isProven(r));
   let cand = pool.map(r=>candFromRow(r, mode)).filter(c=>c.form.supported && !c.hot);
   if(!cand.length) return null;
-  if(mode==='stat') cand.sort((a,b)=> b.p-a.p || b.proj-a.proj);                 // most confident first
-  else cand.sort((a,b)=> ((b.edge??-9)-(a.edge??-9)) || b.p-a.p);                // biggest gap first, then confidence
   const combDec = ls=>ls.reduce((a,c)=>a*c.dec,1);
   const combP   = ls=>ls.reduce((a,c)=>a*c.p,1);
-  const legs = cand.slice(0, Math.min(nLegs || 3, cand.length));   // top quality arms by the mode's currency
+  const want = nLegs || 3;
+  let legs, shortlist=null;
+  if(mode==='stat'){
+    cand.sort((a,b)=> b.p-a.p || b.proj-a.proj);                    // most confident first
+    legs = cand.slice(0, Math.min(want, cand.length));
+  } else {
+    // BALANCE (market): shortlist the top matchups by projection (real strikeout outlook), THEN take
+    // the biggest market gaps within that shortlist — so an edge is only chased on a genuinely good
+    // matchup, never on a marginal arm that merely slipped past the quality gate.
+    shortlist = cand.slice().sort((a,b)=> b.proj-a.proj || b.p-a.p).slice(0, Math.min(Math.max(REC_SHORTLIST, want), cand.length));
+    shortlist.sort((a,b)=> ((b.edge??-9)-(a.edge??-9)) || b.p-a.p);  // biggest gap within the shortlist
+    legs = shortlist.slice(0, Math.min(want, shortlist.length));
+  }
   const dec=combDec(legs), combined=combP(legs);
   const n=legs.length, strongCount=legs.filter(l=>l.strong).length;
   const priced=legs.some(l=>l.edge!=null);
@@ -2551,10 +2562,10 @@ function recommendParlay(rows, nLegs, mode='market'){
   } else if(!priced){
     verdict="LEAN"; reason=`top quality arms by projection — no live Kalshi prices yet, so the gap is TBD (load a slate for prices)`;
   } else {
-    if(strongCount===n && n>=2){ verdict="GO"; reason=`all ${n} beat the market (${edgeTxt}) — best gaps among quality arms, ${(combined*100).toFixed(0)}% to sweep`; }
-    else if(strongCount>=1){ verdict="LEAN"; reason=`${strongCount}/${n} clear the ${(EV_MARGIN*100)|0}-pt edge bar (${edgeTxt}) — best gaps among quality arms`; }
-    else if(avgEdge>=0){ verdict="LEAN"; reason=`quality arms with thin edges (${edgeTxt}) — market prices them close to the model; the best available gaps`; }
-    else { verdict="LEAN"; reason=`quality arms, but the market prices them above the model (${edgeTxt}) — no value edge today, best gaps shown`; }
+    if(strongCount===n && n>=2){ verdict="GO"; reason=`biggest gaps among the top ${REC_SHORTLIST} matchups — all ${n} beat the market (${edgeTxt}), ${(combined*100).toFixed(0)}% to sweep`; }
+    else if(strongCount>=1){ verdict="LEAN"; reason=`${strongCount}/${n} clear the ${(EV_MARGIN*100)|0}-pt edge bar (${edgeTxt}) — biggest gaps among the top matchups`; }
+    else if(avgEdge>=0){ verdict="LEAN"; reason=`top matchups with thin edges (${edgeTxt}) — market prices them close to the model`; }
+    else { verdict="LEAN"; reason=`top matchups, but the market prices them above the model (${edgeTxt}) — best value available, no real edge today`; }
   }
   return { legs, combined, dec, american: decToAm(dec), strongCount, avgEdge, priced, mode, verdict, reason, shortBy: nLegs ? Math.max(0, nLegs-legs.length) : 0 };
 }
@@ -2741,9 +2752,9 @@ function renderKResults(rows, leagueK){
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
       <div class="krec-modes">
-        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Only proven strikeout arms (quality + recent form), ranked by the biggest market GAP — best value up top. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
+        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Balance: shortlist the top ${REC_SHORTLIST} matchups by projection (proven quality + recent form), then pick the biggest market GAPS within that shortlist. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
         <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Only proven strikeout arms (quality + recent form), ranked by model confidence. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored.">💪 Best on Stats</button>
-        <span class="krec-modenote">${recMode==="stat"?`quality arms, ranked by model confidence`:`quality arms, ranked by market gap — best value up top`}</span>
+        <span class="krec-modenote">${recMode==="stat"?`quality arms, ranked by model confidence`:`top ${REC_SHORTLIST} matchups by projection, then the biggest market gaps`}</span>
       </div>
       <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
