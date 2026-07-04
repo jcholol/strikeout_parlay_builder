@@ -2309,6 +2309,9 @@ async function analyzeK(opts={}){
         const ilDaysOut = back ? back.daysOut : null;
         const log=await getGameLog(pp.id, season);
         const l5=log.slice(-5).map(s=>({ k:s.stat.strikeOuts, opp:(info[s.opponent?.id]?.abbr)||shortName(s.opponent?.name||""), home:s.isHome }));
+        // last up-to-10 STARTS' K totals — the recent-form reachability check (does his own game log
+        // say he actually reaches the recommended line?)
+        const recentStartK=log.filter(s=>+s.stat.gamesStarted>=1).slice(-10).map(s=>+s.stat.strikeOuts||0);
         const startsSince = back ? log.filter(s=> s.date>=back.activation && (+s.stat.gamesStarted)>=1).length : null;
         // his K the last time he faced THIS opponent (this season's log; else prior season)
         let vsOppLast=null;
@@ -2361,7 +2364,7 @@ async function analyzeK(opts={}){
           vsOppLast, season,
           temp:ctx.tempF, weather:ctx.condition, wind:ctx.wind, umpire:ctx.umpire,
           startTime: fmtTime(g.gameDate),
-          l5,
+          l5, recentStartK,
           ...m
         });
       }
@@ -2446,6 +2449,17 @@ function oppHot(r){ return (r.oppStreak && r.oppStreak.type==="W" && r.oppStreak
 const KFLOOR=0.64;    // confidence floor: a leg must clear this to be reachable
 const EV_MARGIN=0.07; // MARKET mode gate: model prob must beat the Kalshi mid by ≥7 pts to be a real edge
 const STAT_STRONG=0.68; // STAT mode bar: model prob a leg must clear to be "strong" (market-independent)
+const FORM_MIN_N=4;   // need at least this many recent STARTS before recent form can veto a line
+const FORM_MIN_RATE=0.34; // and he must have actually reached the line in ≥ this share of them
+// recent-form reachability: how often he ACTUALLY hit a target line in his last up-to-10 starts.
+// This is the guardrail against the model over-projecting a mediocre arm and floating him up the
+// board on a fat-payout line his own recent starts say he never reaches. Unknown history (n<FORM_MIN_N)
+// never blocks — we only veto when there's a real sample and he clearly hasn't been getting there.
+function formReach(r, target){
+  const ks = r.recentStartK || [];
+  const n = ks.length, hits = ks.filter(k=>k>=target).length;
+  return { n, hits, rate: n?hits/n:null, supported: n<FORM_MIN_N || (hits/n)>=FORM_MIN_RATE };
+}
 // Build the candidate leg for a row, in one of two modes:
 //   'market' → EV: among lines clearing the confidence floor, take the one whose model prob most
 //              beats the Kalshi mid. Edge, not raw confidence, decides inclusion. (Falls back to the
@@ -2457,34 +2471,40 @@ function candFromRow(r, mode='market'){
   const o=kalshiOdds[normName(r.name)];
   const priced = o ? o.rungs.filter(rr=>rr.bid>0 && rr.ask<=0.92 && (rr.ask-rr.bid)<=0.25 && rr.mid>0) : [];
   const rungAt = t => priced.find(rr=>rr.target===t) || null;
+  // the highest line his recent starts still support (so we never CHOOSE a line his form vetoes)
+  const formCap = (()=>{ let cap=9; for(let t=5;t<=9;t++){ if(!formReach(r,t).supported){ cap=t-1; break; } } return cap; })();
   let best=null;
   if(mode==='stat'){
-    // most aggressive line still clearing the floor (edge plays no part in the choice)
+    // most aggressive line clearing the floor that recent form still supports (edge plays no part)
     let target=5, p=poissonGE(r.proj,5);
-    for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=KFLOOR){target=t;p=pt;} else break; }
+    for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=KFLOOR && t<=formCap){target=t;p=pt;} else break; }
     const rr=rungAt(target);
     best={target, p, pMarket:rr?rr.mid:null, dec:rr?rr.dec:estLegDecimal(p), edge:rr?p-rr.mid:null, live:!!rr};
   } else {
     priced.forEach(rr=>{
       const pm=poissonGE(r.proj, rr.target);
       if(pm < KFLOOR) return;                       // stay above the confidence floor
+      if(rr.target>formCap) return;                 // …and don't chase a line his recent starts don't support
       const edge=pm - rr.mid;                        // model prob vs the market's implied prob
       if(!best || edge>best.edge) best={target:rr.target, p:pm, pMarket:rr.mid, dec:rr.dec, edge, live:true};
     });
     if(!best){
-      // no live price (or nothing clears the floor) → confidence fallback
+      // no live price (or nothing clears the floor / form) → confidence fallback, still form-capped
       let target=5, p=poissonGE(r.proj,5);
-      for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=KFLOOR){target=t;p=pt;} else break; }
+      for(let t=6;t<=9;t++){ const pt=poissonGE(r.proj,t); if(pt>=KFLOOR && t<=formCap){target=t;p=pt;} else break; }
       best={target, p, pMarket:null, dec:estLegDecimal(p), edge:null, live:false};
     }
   }
+  const form=formReach(r, best.target);   // recent reach AT the chosen line, for the verdict + display
   // "strong" — stat mode: model prob ≥ STAT_STRONG; market mode: a real edge (or the ≥65% read with
-  // no price) — and in both the opponent isn't an early-exit risk.
+  // no price). In BOTH: recent starts must actually support the line, and the opponent isn't an
+  // early-exit risk. The form gate is what keeps over-projected mediocre arms off the board.
   const strong = (mode==='stat'
       ? best.p>=STAT_STRONG
-      : (best.edge!=null ? best.edge>=EV_MARGIN : best.p>=0.65)) && !oppHot(r);
+      : (best.edge!=null ? best.edge>=EV_MARGIN : best.p>=0.65)) && form.supported && !oppHot(r);
   return { name:r.name, id:r.id, gamePk:r.gamePk, proj:r.proj, target:best.target, line:best.target,
-           p:best.p, pMarket:best.pMarket, edge:best.edge, dec:best.dec, live:best.live, strong, hot:oppHot(r), mode, r };
+           p:best.p, pMarket:best.pMarket, edge:best.edge, dec:best.dec, live:best.live,
+           form, strong, hot:oppHot(r), mode, r };
 }
 function recommendParlay(rows, nLegs, mode='market'){
   const eligible = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5);
@@ -2571,15 +2591,17 @@ function explainTarget(r, leagueK, mode='market'){
   const L=[];
   L.push(`<b>Why ${chosen?chosen+"+":"under 5"} K?</b> ${mode==='stat'?`Best-on-stats pick: the highest line still ≥64% (our confidence floor), regardless of the market.`:(priced?`We take the line with the most edge over the Kalshi price that still clears our 64% floor.`:`We bet the highest line still ≥64% (our confidence floor).`)}`);
   L.push(`Ladder: ${ladder.map(x=>`${x.t}+ <b>${(x.p*100).toFixed(0)}%</b>`).join(" · ")}`);
+  if(c.form && c.form.n) L.push(`Recent form: hit <b>${chosen?chosen+"+":c.target+"+"} K in ${c.form.hits}/${c.form.n}</b> of his last starts (${Math.round(c.form.rate*100)}%)${!c.form.supported?` <span style="color:var(--red)">— below our ${(FORM_MIN_RATE*100)|0}% support floor, so we won't recommend this line</span>`:``}`);
   if(chosen && priced && mode!=='stat') L.push(`${chosen}+ hits at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}% and carries the most edge among lines still ≥64%.`);
   else if(chosen) L.push(`${chosen}+ clears at ${(poissonGE(r.proj,chosen)*100).toFixed(0)}%; ${nextT}+ is only ${(nextP*100).toFixed(0)}% — below the floor, so we don't stretch for it.`);
   else L.push(`Even 5+ sits under the 64% floor — not a play.`);
   if(priced) L.push(`Market: model <b>${(c.p*100).toFixed(0)}%</b> vs Kalshi <b>${(c.pMarket*100).toFixed(0)}%</b> → edge <b style="color:${c.edge>=EV_MARGIN?'var(--green)':c.edge>=0?'var(--amber)':'var(--red)'}">${c.edge>=0?'+':''}${(c.edge*100).toFixed(0)} pts</b> (${mode==='stat'?`reference only — this pick ignores the market`:`needs ≥${(EV_MARGIN*100)|0} to be strong`}).`);
-  const softWhy = !strong ? (mode==='stat'
-      ? (c.p<STAT_STRONG ? `under the ${(STAT_STRONG*100)|0}% confidence bar` : ``)
-      : (priced
-          ? (c.edge<EV_MARGIN ? `edge under the ${(EV_MARGIN*100)|0}-pt bar — market prices him about right` : ``)
-          : (c.p<0.65 ? `under the 65% confidence bar` : ``))) : ``;
+  const softWhy = !strong ? (
+      (c.form && !c.form.supported) ? `only reached ${c.target}+ K in ${c.form.hits} of his last ${c.form.n} starts`
+    : mode==='stat' ? (c.p<STAT_STRONG ? `under the ${(STAT_STRONG*100)|0}% confidence bar` : ``)
+    : (priced
+        ? (c.edge<EV_MARGIN ? `edge under the ${(EV_MARGIN*100)|0}-pt bar — market prices him about right` : ``)
+        : (c.p<0.65 ? `under the 65% confidence bar` : ``))) : ``;
   L.push(`Verdict: <b style="color:${strong?'var(--green)':'var(--amber)'}">${strong?'STRONG':'soft'}</b>${softWhy?` — ${softWhy}`:''}${oppHot(r)?` · early-exit risk${r.oppStreak&&r.oppStreak.type==="W"&&r.oppStreak.n>=4?` (W${r.oppStreak.n})`:""}${r.momentumF!=null&&r.momentumF<0.97?`, hot bats may shorten the outing`:""}`:''}`);
   const mults=[];
   if(Math.abs((r.parkF||1)-1)>=0.005) mults.push(`park ${pctDelta(r.parkF)}`);
@@ -2730,7 +2752,7 @@ function renderKResults(rows, leagueK){
       </div>
       <div class="krec-meta"><span class="krec-prob">${(rec.combined*100).toFixed(0)}% to sweep · ${rec.dec.toFixed(2)}× payout</span>${rec.shortBy?`<span class="krec-warn">only ${rec.legs.length} confident legs available</span>`:""}</div>
       <div class="krec-sub">${rec.verdict==="SKIP"?"Shown anyway so you can see what was considered. ":""}${rec.legs.some(l=>l.live)?"⚡ Live Kalshi prices where available; other legs estimated.":"Odds are model estimates — load a slate to pull live Kalshi prices."}</div>
-      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="${l.mode==='stat'?`soft — under ${(STAT_STRONG*100)|0}% model confidence or hot opponent`:`soft — no real edge vs the market (or hot opponent)`}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
+      <div class="krec-legs">${rec.legs.map((l,li)=>`<div class="krec-leg" data-leg="${li}"><span class="krec-name">${esc(l.name)}${l.strong?'':` <span style="color:var(--amber);font-size:10px" title="${l.form&&!l.form.supported?`soft — reached ${l.target}+ K in only ${l.form.hits} of his last ${l.form.n} starts`:l.hot?`soft — early-exit risk (hot opponent)`:l.mode==='stat'?`soft — under ${(STAT_STRONG*100)|0}% model confidence`:`soft — no real edge vs the market`}">soft</span>`}</span> <span class="krec-bet">${l.target}+ K</span> <span class="krec-p">${(l.p*100).toFixed(0)}% · ${fmtMult(l.dec)}${l.edge!=null?` · <span style="color:${l.edge>=EV_MARGIN?'var(--green)':l.edge>=0?'var(--amber)':'var(--red)'}" title="model prob ${(l.p*100).toFixed(0)}% vs market ${(l.pMarket*100).toFixed(0)}%">${l.edge>=0?'+':''}${(l.edge*100).toFixed(0)} pts</span>`:''}${l.live?' <span style="color:var(--green)">⚡</span>':' <span style="color:var(--ink-faint)">est</span>'}</span> <button class="whybtn" data-why-leg="${li}" style="margin-left:6px;font-size:10px;background:none;border:1px solid var(--ink-faint);color:var(--ink-dim);border-radius:4px;padding:1px 5px;cursor:pointer">why?</button> <button class="ladbtn" data-lad-leg="${li}" title="see the payout & edge at each strikeout line">📊 lines</button></div><div data-lad-leg-panel="${li}" style="display:none">${kLadderHTML(l)}</div><div data-why-leg-panel="${li}" style="display:none">${explainTarget(l.r, leagueK, recMode)}</div>`).join("")}</div>
       <button class="btn sm amber" id="buildRec">Load ${rec.legs.length}-Leg into Builder</button>
       `;})() : `<div class="krec-sub">No qualifying 5+ K arm on this slate — nothing to consider. 🛑 SKIP.</div>`}</div>
     </div>
