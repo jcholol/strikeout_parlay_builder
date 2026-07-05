@@ -1660,10 +1660,10 @@ let slateState = null;       // {games, statById, date} of last loaded slate
 let pitcherIndex = null;     // { list:[{id,name,throws}], byNorm:Map } for name autocomplete
 let autoTimer = null;
 let recLegCount = 3;         // chosen parlay size for the suggestion (2–5)
-let recMode = "stat";        // suggestion brain: STATS ONLY. The "beat the market" lens was retired —
-                             // edge-ranking structurally favors arms the market distrusts (Wacha/Rocker
-                             // class), i.e. exactly the legs that don't hit. Kalshi prices are still
-                             // used for payout + shown as reference, never for picking.
+let recMode = "stat";        // suggested-parlay lens: "stat" (best on the model — default) | "market"
+                             // (beat the price). Stats stay the default because edge-ranking favors
+                             // arms the market distrusts (Wacha/Rocker class); both lenses share the
+                             // same quality gates + double shortlist, only the ranking currency differs.
 let lastK = null;            // {rows, leagueK} of the last Best-K analysis, for re-renders
 let kShown = false;          // are Best-K results currently displayed?
 let _lastKrefresh = 0;       // throttle background re-analysis (lineup updates)
@@ -2554,10 +2554,10 @@ function skipReason(r, c, mode, ctx){
 function recommendParlay(rows, nLegs, mode='stat'){
   const isQuality = r => r.pK>=QUAL_K;   // blended K rate only — no whiff bypass
   const isProven  = r => !r.thin && (r.gamesStarted||0)>=QUAL_MIN_GS;
-  // STATS-ONLY suggestion: only genuine, proven strikeout arms whose recent form supports the line
-  // are candidates (the Edge Board still lists everyone). Then the double shortlist + model-confidence
-  // ranking below. mode='market' branches remain only as dead code from the retired edge lens —
-  // Kalshi prices are payout/reference, never a selection criterion.
+  // "Best stats" gate FIRST: only genuine, proven strikeout arms whose recent form supports the line
+  // are candidates for the suggestion (the Edge Board still lists everyone). THEN rank those real arms
+  // by the mode's currency — so Beat the Market = the biggest market GAPS among quality arms, not the
+  // biggest gaps period (which live on arms the market rightly fades, i.e. the junk we just filtered).
   const pool = rows.filter(r=>!r.bullpen && !(r.ilBackDays!=null && r.ilBackDays<=12) && r.proj>=5 && isQuality(r) && isProven(r));
   let cand = pool.map(r=>candFromRow(r, mode)).filter(c=>c.form.supported && !c.hot);
   if(!cand.length) return null;
@@ -2745,7 +2745,7 @@ function kLadderHTML(l){
 /* Edge board: every eligible arm at its best line, ranked by model-vs-market gap. This is the
    pick-list — the model finds the edges, you choose off the live Kalshi prices. */
 function edgeBoardHTML(rows){
-  const cands = rows.filter(r=>!r.bullpen && r.proj>=3).map(r=>({r, c:candFromRow(r)}));
+  const cands = rows.filter(r=>!r.bullpen && r.proj>=3).map(r=>({r, c:candFromRow(r, recMode)}));
   cands.sort((a,b)=>{
     if(a.c.strong!==b.c.strong) return a.c.strong?-1:1;   // real plays first — a big edge on a
     const ae=a.c.edge, be=b.c.edge;                        // contact/unproven arm no longer floats up
@@ -2757,9 +2757,9 @@ function edgeBoardHTML(rows){
   const anyPriced=cands.some(x=>x.c.edge!=null);
   return `
   <div class="edgeboard">
-    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?`reference only — the model's stat-picked line with the Kalshi price on it · dimmed = soft (contact/unproven/cold form) · picks are never edge-driven`:"no live Kalshi prices yet — model's stat-picked lines; prices fill in when books open"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
+    <div class="eb-head" data-sec-head="edgeboard"><span class="eb-title">📊 Edge Board</span><span class="eb-sub">${anyPriced?(recMode==="market"?`real plays first, then biggest edge · dimmed = soft (contact/unproven/not reaching the line)`:`reference only — the model's stat-picked line with the Kalshi price on it · dimmed = soft (contact/unproven/cold form) · stat picks are never edge-driven`):"no live Kalshi prices yet — model's stat-picked lines; prices fill in when books open"}</span><button class="collapse-btn sec-toggle" style="margin-left:auto" title="Collapse / expand the Edge Board" aria-label="Collapse section"><span class="chev">▾</span></button></div>
     <table class="ebtable">
-      <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="the model's stat-picked line: highest line still ≥64% that his recent form supports">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
+      <thead><tr><th style="text-align:left">Pitcher</th><th style="text-align:left">Matchup</th><th title="${recMode==="market"?"model's best line: most model-vs-market edge that still clears the 64% floor":"the model's stat-picked line: highest line still ≥64% that his recent form supports"}">Line</th><th title="model probability at that line">p(model)</th><th title="live Kalshi mid = market's implied probability">Kalshi</th><th title="model minus market — your statistical edge, in points">Edge</th></tr></thead>
       <tbody>${cands.map(({r,c})=>{
         const eColor = c.edge==null?"var(--ink-faint)":c.edge>=EV_MARGIN?"var(--green)":c.edge>=0?"var(--amber)":"var(--red)";
         return `<tr data-eb-pid="${r.id}" data-eb-game="${r.gamePk}" data-eb-name="${esc(r.name)}" data-eb-line="${c.target}"${c.strong?'':' style="opacity:.5"'} title="${c.strong?`click to add ${esc(r.name)} ${c.target}+ K to the builder`:`soft — ${esc(c.softReason||"")} · click to add anyway`}">
@@ -2796,7 +2796,9 @@ function renderKResults(rows, leagueK){
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
       </div>
       <div class="krec-modes">
-        <span class="krec-modenote">💪 stats only — top matchups ∩ top arms, ranked by model confidence · Kalshi prices are payout/reference, never the reason for a pick</span>
+        <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Double shortlist (top-${REC_SHORTLIST} matchups ∩ top-${REC_SHORTLIST} arms), ranked by model confidence. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored for picking.">💪 Best on Stats</button>
+        <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Same double shortlist (top matchups ∩ top arms) — then the biggest market GAPS win. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
+        <span class="krec-modenote">${recMode==="stat"?`top matchups ∩ top arms, ranked by model confidence`:`top matchups ∩ top arms, ranked by market gap`}</span>
       </div>
       <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
@@ -2836,7 +2838,7 @@ function renderKResults(rows, leagueK){
         <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%</td>
         <td>${(poissonGE(r.proj,7)*100).toFixed(0)}%</td>
       </tr>
-      <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="10" style="padding:0 8px 8px">${explainTarget(r, leagueK)}</td></tr>`).join("")}</tbody>
+      <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="10" style="padding:0 8px 8px">${explainTarget(r, leagueK, recMode)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
       log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload, opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances) & pitch-arsenal matchup (how this lineup whiffs vs his specific pitch mix, league-relative)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
@@ -2854,7 +2856,7 @@ function renderKResults(rows, leagueK){
       // default the line to the same 64%-confidence-floor target the Suggested Parlay uses
       // (the highest line still clearing 64%) — NOT the raw rounded projection, which for
       // half-K projections is a sub-coin-flip. Kalshi odds for that target auto-fill.
-      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts", line:String(candFromRow(r).target)});
+      addLegFromSlate({pitcher:tr.dataset.name, personId:+tr.dataset.pid, gamePk:+tr.dataset.game, market:"Strikeouts", line:String(candFromRow(r, recMode).target)});
     });
   });
   // ⓘ → toggle the per-row "why this target?" breakdown (without adding a leg)
@@ -2883,6 +2885,10 @@ function renderKResults(rows, leagueK){
   });
   out.querySelectorAll(".legbtn").forEach(b=>{
     b.addEventListener("click", ()=>{ recLegCount=+b.dataset.legs; renderKResults(lastK.rows, lastK.leagueK); });
+  });
+  // 💪 Best on Stats / 📈 Beat the Market — toggle the suggestion lens
+  out.querySelectorAll(".modebtn").forEach(b=>{
+    b.addEventListener("click", ()=>{ recMode=b.dataset.mode; renderKResults(lastK.rows, lastK.leagueK); });
   });
   const recBtn=out.querySelector("#buildRec");
   if(recBtn && rec){ recBtn.addEventListener("click", ()=>buildRecommendedParlay(rec.legs)); }
