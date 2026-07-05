@@ -481,6 +481,8 @@
   .modebtn:hover{border-color:var(--amber-dim);color:var(--chalk)}
   .modebtn.active{background:var(--amber);border-color:var(--amber);color:var(--on-amber);box-shadow:var(--glow-amber)}
   .krec-modenote{font-family:"JetBrains Mono";font-size:10px;letter-spacing:.3px;color:var(--ink-faint)}
+  .sugtag{font-size:9px;opacity:.85;cursor:default}
+  .krec-record{font-family:"JetBrains Mono";font-size:10px;letter-spacing:.3px;color:var(--ink-dim);margin-left:auto;white-space:nowrap}
   .krec-rank{font-family:"JetBrains Mono";font-size:10px;font-weight:700;color:var(--ink-faint);background:rgba(127,127,127,.12);border-radius:5px;padding:0 5px;vertical-align:middle}
   /* selection funnel — explains the suggestion vs the projection-sorted ranking */
   .krec-funnel{margin:6px 0 10px;font-family:"JetBrains Mono";font-size:11px}
@@ -972,7 +974,7 @@ function renderLegs(){
   const wrap = document.getElementById("legList");
   wrap.innerHTML = draftLegs.map((l,i)=>`
     <div class="row leg" data-i="${i}">
-      <label><span>Pitcher</span><input data-k="pitcher" list="pitcherList" autocomplete="off" value="${esc(l.pitcher)}" placeholder="e.g. Tarik Skubal" /></label>
+      <label><span>Pitcher${l.suggested?' <span class="sugtag" title="model-suggested leg — editing the pick clears the tag">🎟️</span>':''}</span><input data-k="pitcher" list="pitcherList" autocomplete="off" value="${esc(l.pitcher)}" placeholder="e.g. Tarik Skubal" /></label>
       <label><span>Market</span><select data-k="market">${MARKETS.map(m=>`<option ${m===l.market?'selected':''}>${m}</option>`).join("")}</select></label>
       <label><span>Line</span><input data-k="line" value="${esc(l.line)}" placeholder="5" inputmode="numeric" /></label>
       <label><span>Side</span><select data-k="side">${SIDES.map(sd=>`<option ${sd===l.side?'selected':''}>${sd}</option>`).join("")}</select></label>
@@ -987,6 +989,12 @@ function renderLegs(){
       const i = +row.dataset.i;
       const k = e.target.dataset.k;
       draftLegs[i][k] = e.target.value;
+      // hand-editing the pick (not the price) makes it YOUR pick — untag it so the model's
+      // record only ever counts lines it actually chose
+      if(draftLegs[i].suggested && k!=="odds"){
+        delete draftLegs[i].suggested; delete draftLegs[i].sugMode;
+        const tag=row.querySelector(".sugtag"); if(tag) tag.remove();
+      }
       if(k==="pitcher"){
         // recover the MLBAM id when the typed/picked name matches a known pitcher (helps grading);
         // otherwise drop stale ids so we don't grade against the wrong player
@@ -1090,7 +1098,7 @@ function renderBoard(){
       return `
       <div class="leg-line ${res}${isLiveK?" live":""}" data-legtoggle data-id="${p.id}" data-leg="${i}" title="Click to mark this leg hit / miss / clear">
         <div class="num">${String(i+1).padStart(2,"0")}</div>
-        <div class="pitcher">${esc(l.pitcher||"—")}</div>
+        <div class="pitcher">${esc(l.pitcher||"—")}${l.suggested?' <span class="sugtag" title="model-suggested leg — counted on the 🎟️ record">🎟️</span>':''}</div>
         <div class="prop">${l.market==="Strikeouts" ? `<b><span class="editline" data-editline data-id="${p.id}" data-leg="${i}" title="Click to fix the line">${esc(l.line)}</span>+</b> K` : `<b>${esc(l.side)} <span class="editline" data-editline data-id="${p.id}" data-leg="${i}" title="Click to fix the line">${esc(l.line)}</span></b> ${esc(l.market)}`}${progress}</div>
         <div class="odds">${l.odds!==""?fmtMult(l.odds):"—"}</div>
         <div class="legmark">${mark}</div>
@@ -1259,6 +1267,8 @@ function startEditLine(el){
       const v=inp.value.trim();
       if(v!=="" && v!==String(leg.line)){
         leg.line=v;
+        // a suggested leg's line is auto-filled — changing it makes it your pick, not the model's
+        delete leg.suggested; delete leg.sugMode;
         // re-grade against the corrected line when the actual K count is already recorded
         if(leg.actual!=null && leg.market==="Strikeouts") leg.result = (+leg.actual >= +leg.line) ? "hit" : "miss";
         save();
@@ -1594,6 +1604,14 @@ function renderCalibration(){
       <div><span style="color:var(--ink-faint)">Scored legs:</span> <b>${c.n}</b> · overall hit rate <b>${pct(c.hitRate)}</b> vs avg model prob <b>${pct(c.avgP)}</b>${c.n<50?` <span style="color:var(--amber)">· ${c.n}/50 — small sample, treat rules as hypotheses</span>`:""}</div>
       <div><span style="color:var(--ink-faint)">Brier (lower = better):</span> ${brierLine}</div>
       <div><span style="color:var(--ink-faint)">Realized edge:</span> ${realized}</div>
+      ${(()=>{ const sr=suggestedRecord(), cal=kCalibFactor(); const rec=sr.n
+          ? `<b>${sr.hit}–${sr.miss}</b> (${pct(sr.hit/sr.n)}) on settled 🎟️ legs loaded straight from the model's suggestion`
+          : `none settled yet — "Load into builder", place the ticket, and the auto-grader scores it`;
+        const cl=cal.n
+          ? `${cal.n} settled legs threw <b>${cal.sumA} K</b> vs <b>${cal.sumP.toFixed(1)}</b> projected at bet time${cal.apply?` → projections auto-scaled <b>×${cal.f.toFixed(2)}</b>`:` — auto-adjustment kicks in at ${CALIB_MIN_LEGS}+ legs (would be ×${cal.f.toFixed(2)})`}`
+          : `no settled legs with a frozen bet-time projection yet`;
+        return `<div><span style="color:var(--ink-faint)">Suggested picks:</span> ${rec}</div>
+      <div><span style="color:var(--ink-faint)">Self-calibration:</span> ${cl}</div>`; })()}
     </div>
     <table class="ptable" style="margin-top:10px">
       <thead><tr><th>Model prob bucket</th><th>Legs</th><th>Predicted</th><th>Actual hit%</th><th>Gap</th></tr></thead>
@@ -2283,6 +2301,8 @@ async function analyzeK(opts={}){
     const lgRanks=await getLeagueRanks(season);
     const savant=await loadSavant(season);   // Statcast whiff% / chase% (Tier-1 stuff)
     const arsenal=await loadArsenal(season); // Statcast pitch mix + per-pitch-type lineup whiff
+    const calib=kCalibFactor();              // self-grading: settled bet-time projections vs real Ks
+    const calibF=calib.apply?calib.f:1.00;
     const rows=[];
     for(const g of games){
       for(const side of ["away","home"]){
@@ -2360,7 +2380,7 @@ async function analyzeK(opts={}){
         const arsM=arsenalMatchup(pp.id, (lu&&lu.order)?lu.order:null, opp.team.abbreviation||"", arsenal);
         // fold the (league-relative) mix edge into the projection, ~1% per whiff-point, capped ±6%
         const arsenalF=(arsM && arsM.mixEdge!=null) ? Math.max(0.94, Math.min(1.06, 1 + 0.010*arsM.mixEdge)) : 1.00;
-        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF * arsenalF);
+        const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF * arsenalF * calibF);
         m.projBase=m.proj; m.proj=adjProj;
         rows.push({
           name:pp.fullName, id:pp.id, gamePk:g.gamePk,
@@ -2373,7 +2393,7 @@ async function analyzeK(opts={}){
           oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
           venue: g.venue?.name || "",
           hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase, arsenal:arsM, arsenalF,
-          parkF, weatherF, workFactor:work.factor, workFlags:work.flags,
+          parkF, weatherF, workFactor:work.factor, workFlags:work.flags, calibF, calib,
           momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
           oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
           vsOppLast, season,
@@ -2473,6 +2493,35 @@ const QUAL_K=0.23;    // quality floor: blended K rate per batter (league ~.22).
 const QUAL_MIN_GS=5;  // and he needs a real sample this season (no 1–4 start call-ups)
 const REC_SHORTLIST=7; // Beat-the-Market: shortlist the top-N matchups by projection, then pick by edge
                        // (7 so even a 5-leg parlay still picks the best gaps out of a wider matchup pool)
+// ---- Track-record calibration: the model grades itself on settled tickets ----
+// Every placed strikeout leg freezes the bet-time projection (projK); the auto-grader records the
+// real K count (actual). Σactual/Σprojected — shrunk toward 1.00 by a prior so one cold week can't
+// whipsaw the model, and clamped — becomes one more multiplier on every projection. Because it's
+// measured on the legs we actually bet, it corrects exactly the selection bias that matters: the
+// model being systematically optimistic on its own picks.
+const CALIB_MIN_LEGS=10;   // hands off the model until this many legs have settled
+const CALIB_PRIOR_K=60;    // shrinkage prior in strikeouts (~10 legs' worth) — tiny samples ≈ ×1.00
+const CALIB_CLAMP=[0.85,1.10]; // track record alone never moves a projection more than −15%/+10%
+function kCalibFactor(){
+  let sumA=0, sumP=0, n=0;
+  parlays.forEach(p=>p.legs.forEach(l=>{
+    if(l.market!=="Strikeouts" || l.projK==null || l.actual==null) return;
+    sumA+=+l.actual; sumP+=+l.projK; n++;
+  }));
+  const f=Math.max(CALIB_CLAMP[0], Math.min(CALIB_CLAMP[1], (sumA+CALIB_PRIOR_K)/(sumP+CALIB_PRIOR_K)));
+  return { n, sumA, sumP, raw:(sumP>0?sumA/sumP:1), f, apply:n>=CALIB_MIN_LEGS && sumP>0 };
+}
+// suggested-pick scoreboard: settled legs that entered the builder via "Load into builder" and
+// were never hand-edited (an edited leg is the user's pick, not the model's — the tag drops)
+function suggestedRecord(){
+  let hit=0, miss=0;
+  parlays.forEach(p=>p.legs.forEach(l=>{
+    if(!l.suggested) return;
+    const res=l.result || (p.status==="won"?"hit":"");   // a won ticket settles every leg as hit
+    if(res==="hit") hit++; else if(res==="miss") miss++;
+  }));
+  return { hit, miss, n:hit+miss };
+}
 // recent-form reachability: how often he ACTUALLY hit a target line in his last up-to-10 starts.
 // This is the guardrail against the model over-projecting a mediocre arm and floating him up the
 // board on a fat-payout line his own recent starts say he never reaches. Unknown history (n<FORM_MIN_N)
@@ -2625,6 +2674,7 @@ function buildRecommendedParlay(legs){
     leg.odds=l.dec.toFixed(2);   // Kalshi multiplier when live, else model estimate
     // calibration substrate: freeze the model & market probs AT BET TIME so we can score them
     leg.pModel=l.p; leg.pMarket=l.pMarket; leg.projK=l.proj;
+    leg.suggested=true; leg.sugMode=recMode;   // the model's own pick — counted on the 🎟️ record
     return leg;
   });
   if(!draftLegs.length) draftLegs=[newLeg()];
@@ -2666,7 +2716,10 @@ function explainTarget(r, leagueK, mode='stat'){
   if(Math.abs((r.workFactor||1)-1)>=0.005) mults.push(`workload ${pctDelta(r.workFactor)}`);
   if(Math.abs((r.momentumF||1)-1)>=0.005) mults.push(`early-exit ${pctDelta(r.momentumF)}`);
   if(Math.abs((r.arsenalF||1)-1)>=0.005) mults.push(`arsenal ${pctDelta(r.arsenalF)}`);
+  if(Math.abs((r.calibF||1)-1)>=0.005) mults.push(`track record ${pctDelta(r.calibF)}`);
   L.push(`Proj ${(r.projBase!=null?r.projBase:r.proj).toFixed(1)} → <b>${r.proj.toFixed(1)} K</b>${mults.length?` (${mults.join(", ")})`:""}`);
+  if(r.calib && r.calib.apply)
+    L.push(`Self-grade: your ${r.calib.n} settled legs threw <b>${r.calib.sumA} K</b> vs <b>${r.calib.sumP.toFixed(1)}</b> projected at bet time → every projection scaled <b>×${r.calib.f.toFixed(2)}</b> (shrunk toward 1.00, clamped ${CALIB_CLAMP[0]}–${CALIB_CLAMP[1]})`);
   L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`);
   // Tier-1: show where the whiff signal regressed a noisy outcome K rate
   if(r.pWhiff!=null && r.pKraw!=null && Math.abs(r.pK-r.pKraw)>=0.005)
@@ -2799,6 +2852,11 @@ function renderKResults(rows, leagueK){
         <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Double shortlist (top-${REC_SHORTLIST} matchups ∩ top-${REC_SHORTLIST} arms), ranked by model confidence. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored for picking.">💪 Best on Stats</button>
         <button class="modebtn${recMode==="market"?" active":""}" data-mode="market" title="Same double shortlist (top matchups ∩ top arms) — then the biggest market GAPS win. 'Strong' = beats the Kalshi mid by ≥${(EV_MARGIN*100)|0} pts.">📈 Beat the Market</button>
         <span class="krec-modenote">${recMode==="stat"?`top matchups ∩ top arms, ranked by model confidence`:`top matchups ∩ top arms, ranked by market gap`}</span>
+        ${(()=>{ const sr=suggestedRecord(), cal=kCalibFactor();
+          if(!sr.n && !cal.apply) return "";
+          const rec=sr.n?`🎟️ record <b style="color:${sr.hit>=sr.miss?'var(--green)':'var(--red)'}">${sr.hit}–${sr.miss}</b> (${Math.round(sr.hit/sr.n*100)}%)`:"";
+          const cf=cal.apply?`${sr.n?" · ":""}self-calib ×${cal.f.toFixed(2)}`:"";
+          return `<span class="krec-record" title="settled model-suggested legs (hit–miss)${cal.apply?` · projections currently scaled ×${cal.f.toFixed(2)} from ${cal.n} settled legs — see any ⓘ panel`:``}">${rec}${cf}</span>`; })()}
       </div>
       <div class="krec-body">${rec ? (()=>{
         const vColor = rec.verdict==="GO"?"var(--green)":rec.verdict==="SKIP"?"var(--red)":"var(--amber)";
@@ -3064,6 +3122,8 @@ async function gradeAll(opts={}){
       }catch(e){ skipped++; }
     }
     save(); renderAll();   // persists auto-marked legs + K counts even on skipped tickets
+    // fresh results just landed → re-crunch so the self-calibration factor updates immediately
+    if(settled>0 && kShown && slateState && slateState.games?.length){ _lastKrefresh=0; analyzeK({quiet:true}).catch(()=>{}); }
     if(!silent) toast(`Settled ${settled} ticket${settled!==1?"s":""}${skipped?` · ${skipped} not final yet`:""}`);
     else if(settled>0) toast(`Auto-settled ${settled} ticket${settled!==1?"s":""} from final results`);
     return settled;
