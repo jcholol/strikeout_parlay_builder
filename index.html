@@ -2424,8 +2424,8 @@ function pitcherNote(r){
   if(r.hand) tags.push(r.hand==="L"?"LHP":"RHP");
   // Tier-1 stuff first: whiff% (whiffs/swing). League ~25%; <22% = soft stuff (regression risk).
   if(r.pWhiff!=null) tags.push(`${r.pWhiff.toFixed(0)}% whiff${r.pWhiff>=32?" 🔥":r.pWhiff<22?" ⚠️soft":""}`);
-  // arsenal: his top pitches by usage (🎛 FF54/SL30/CH16)
-  if(r.arsenal && r.arsenal.top.length) tags.push("🎛 "+r.arsenal.top.slice(0,3).map(p=>`${p.type}${p.usage.toFixed(0)}`).join("/"));
+  // (raw pitch-mix tag removed by request — the arsenal still shows in the ⓘ panel, and its
+  // matchup read stays on the lineup side as the "vs his mix" tag)
   const ipN=ipToNum(r.ip);
   if(ipN>=10 && r.so){ const k9=r.so/ipN*9; tags.push(`${k9>=11?Math.round(k9)+"+":k9.toFixed(1)} K/9`); }
   // (MLB/league K rank moved next to the pitcher's name in the ranking table — no longer duplicated here)
