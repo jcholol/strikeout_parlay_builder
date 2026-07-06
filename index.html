@@ -388,6 +388,8 @@
   .ticket-foot .n .v.amber{color:var(--amber)}
   .ticket-foot .n .v.editpay,.ticket-foot .n .v.editwager{cursor:pointer;border-bottom:1px dashed var(--ink-faint);display:inline-block;transition:color .12s}
   .ticket-foot .n .v.editpay:hover,.ticket-foot .n .v.editwager:hover{color:var(--amber);border-bottom-color:var(--amber)}
+  .ticket-top .date.editdate{cursor:pointer;border-bottom:1px dashed var(--ink-faint);transition:color .12s}
+  .ticket-top .date.editdate:hover{color:var(--amber);border-bottom-color:var(--amber)}
   .ticket-foot .n .v .edited{font-family:"JetBrains Mono";font-size:11px;color:var(--ink-faint);margin-left:5px}
   .pay-input{width:96px;font-family:"JetBrains Mono";font-weight:800;font-size:16px;padding:2px 6px;border:1px solid var(--amber-dim);border-radius:6px;background:var(--bg);color:var(--chalk)}
   .ticket-note{
@@ -1120,7 +1122,7 @@ function renderBoard(){
           <span class="badge ${p.status}">${p.status}</span>
           <span class="legcount">${p.legs.length}-Leg Parlay</span>
         </div>
-        <span class="date">${fmtDate(p.date)}</span>
+        <span class="date editdate" data-editdate data-id="${p.id}" title="Click to change the bet date (auto-grading looks up games on this date)">${fmtDate(p.date)}</span>
       </div>
       <div class="ticket-collapsed-summary">
         <span class="cs-pitchers">${csPitchers}</span>
@@ -1166,6 +1168,9 @@ function renderBoard(){
   });
   board.querySelectorAll("[data-editnote]").forEach(el=>{
     el.addEventListener("click", ()=>startEditNote(el));
+  });
+  board.querySelectorAll("[data-editdate]").forEach(el=>{
+    el.addEventListener("click", ()=>startEditDate(el));
   });
   board.querySelectorAll("[data-collapse]").forEach(b=>{
     b.addEventListener("click", ()=>toggleCollapse(b.dataset.id));
@@ -1227,6 +1232,29 @@ function startEditWager(el){
     renderAll();
   };
   inp.addEventListener("blur", ()=>commit(true));
+  inp.addEventListener("keydown", e=>{ if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
+}
+
+// click-to-edit a ticket's bet date — fixes a wrong save-day date so the auto-grader
+// looks up the RIGHT slate's final scores (it searches games on p.date)
+function startEditDate(el){
+  if(el.querySelector("input")) return;          // already editing
+  const id=el.dataset.id, p=parlays.find(x=>x.id===id); if(!p) return;
+  const cur=/^\d{4}-\d{2}-\d{2}$/.test(p.date||"") ? p.date : new Date().toISOString().slice(0,10);
+  el.innerHTML=`<input class="line-input" type="date" value="${cur}" style="width:auto;font-size:11px" />`;
+  const inp=el.querySelector("input"); inp.focus();
+  let done=false;
+  const commit=ok=>{
+    if(done) return; done=true;
+    if(ok && /^\d{4}-\d{2}-\d{2}$/.test(inp.value) && inp.value!==p.date){
+      p.date=inp.value;
+      save();
+      toast("Date updated — auto-grading will use this slate");
+    }
+    renderAll();
+  };
+  inp.addEventListener("blur", ()=>commit(true));
+  inp.addEventListener("change", ()=>commit(true));
   inp.addEventListener("keydown", e=>{ if(e.key==="Enter") commit(true); else if(e.key==="Escape") commit(false); });
 }
 
