@@ -2201,6 +2201,42 @@ async function getGameContext(gamePk){
   return gameCtxCache[gamePk]=ctx;
 }
 
+/* PROJECTED lineup — the starting 9 this team last ran against a same-handed starter. Used (and
+   shown as ≈9) until the real lineup posts: the starter faces the 9, not the bench that dilutes
+   team-season splits, and most teams run a stable lineup vs RHP / vs LHP. */
+const projLineupCache={};   // "season:teamId:hand:date" -> {so,pa,order,date} | null
+async function getProjectedLineup(teamId, hand, season, dateISO, excludePk){
+  const key=`${season}:${teamId}:${hand||"?"}:${dateISO}`;
+  if(key in projLineupCache) return projLineupCache[key];
+  let out=null;
+  try{
+    const end=new Date(dateISO+"T12:00:00Z"), start=new Date(end); start.setUTCDate(start.getUTCDate()-14);
+    const iso=d=>d.toISOString().slice(0,10);
+    const sc=await jget(`${MLB}/schedule?sportId=1&teamId=${teamId}&startDate=${iso(start)}&endDate=${iso(end)}`);
+    const games=(sc.dates||[]).flatMap(d=>d.games||[])
+      .filter(g=>g.gamePk!==excludePk && /final/i.test(g.status?.detailedState||""))
+      .sort((a,b)=> new Date(b.gameDate)-new Date(a.gameDate));   // newest first
+    for(const g of games){
+      const side = g.teams.home.team.id===teamId ? "home" : "away";
+      const box=await getBox(g.gamePk);
+      const starterId=box.teams?.[side==="home"?"away":"home"]?.pitchers?.[0];   // first pitcher used = starter
+      if(!starterId) continue;
+      const sHand=await getPitcherHand(starterId);
+      if(hand && sHand && sHand!==hand) continue;      // want the 9 they run vs THIS hand
+      const mine=box.teams[side];
+      const order=Object.values(mine.players||{})      // battingOrder 100..900 (round hundreds) = the starting 9
+        .filter(p=>p.battingOrder && +p.battingOrder%100===0 && +p.battingOrder<=900)
+        .sort((a,b)=>+a.battingOrder-+b.battingOrder)
+        .map(p=>p.person.id);
+      if(order.length<9) continue;
+      let so=0,pa=0;
+      order.forEach(id=>{ const bb=mine.players["ID"+id]?.seasonStats?.batting; if(bb){ so+=+bb.strikeOuts||0; pa+=+bb.plateAppearances||0; } });
+      if(pa>120){ out={so,pa,order,date:g.officialDate||String(g.gameDate||"").slice(0,10)}; break; }
+    }
+  }catch(e){}
+  return projLineupCache[key]=out;
+}
+
 /* ---- environmental K factors (multipliers on the strikeout projection) ---- */
 // approximate strikeout park factors (>1 = more Ks; pitcher-friendly). Default 1.00.
 const PARK_K = {
@@ -2315,8 +2351,16 @@ async function analyzeK(opts={}){
         const vsHand=await getTeamHitVsHand(opp.team.id, season);
         const overallHit=await getTeamHit(opp.team.id, season);
         const splitHit=(hand && vsHand[hand] && +vsHand[hand].plateAppearances>50) ? vsHand[hand] : null;
-        // opponent K rate: prefer the ACTUAL posted lineup (skewed for handedness), else team-season
-        const lu=ctx.lineups[opp.team.id];
+        // opponent K rate: prefer the ACTUAL posted lineup; before it posts, the PROJECTED lineup
+        // (their last starting 9 vs a same-handed starter); team-season split only as last resort
+        let lu=ctx.lineups[opp.team.id], lineupProjected=false, lineupFrom=null;
+        if(!(lu && lu.pa>120)){
+          const plu=await getProjectedLineup(opp.team.id, hand, season, slateState.date, g.gamePk);
+          if(plu){ lu=plu; lineupProjected=true; lineupFrom=plu.date; }
+        }
+        // raw team K% vs this hand (or overall) — kept for display beside the lineup number
+        const oppVsHandK = splitHit ? (+splitHit.strikeOuts)/(+splitHit.plateAppearances)
+                         : overallHit ? (+overallHit.strikeOuts)/(+overallHit.plateAppearances) : null;
         let oppHit=splitHit||overallHit, lineupUsed=false, lineupK=null;
         let oppN = +oppHit.plateAppearances || 600, oppWhiff=null, oppChase=null;
         if(lu && lu.pa>120){
@@ -2327,7 +2371,7 @@ async function analyzeK(opts={}){
           const adjK=Math.max(0.10, Math.min(0.40, lineupK*handRatio));
           oppHit={strikeOuts:adjK, plateAppearances:1};
           oppN=lu.pa;                                               // real PA weight for the whiff blend
-          lineupUsed=true;
+          lineupUsed=!lineupProjected;   // 📋 = actually posted; projected shows as ≈9
           // aggregate the posted 9's Statcast whiff% + chase% (PA-weighted) from Savant
           if(lu.order){
             let wS=0,wN=0,cS=0,cN=0;
@@ -2392,7 +2436,7 @@ async function analyzeK(opts={}){
           oppRecord: opp.leagueRecord ? `${opp.leagueRecord.wins}-${opp.leagueRecord.losses}` : "",
           oppKpa: oppHit ? (+oppHit.strikeOuts)/(+oppHit.plateAppearances) : null,
           venue: g.venue?.name || "",
-          hand, oppSplit:!!splitHit, lineupUsed, lineupK, oppChase, arsenal:arsM, arsenalF,
+          hand, oppSplit:!!splitHit, lineupUsed, lineupK, lineupProjected, lineupFrom, oppVsHandK, oppChase, arsenal:arsM, arsenalF,
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags, calibF, calib,
           momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
           oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
@@ -2444,14 +2488,14 @@ function lineupNote(r, leagueK){
   if(r.oppRecord) tags.push(`${r.oppAb} ${r.oppRecord}`);
   // posted lineups are 9 regulars — grade them against other STARTING lineups, not the
   // all-batters league avg, or most of the slate reads "below avg" (bench bats dilute leagueK)
-  const kBase = r.lineupUsed ? leagueK*LINEUP_LG_ADJ : leagueK;
+  const kBase = (r.lineupUsed||r.lineupProjected) ? leagueK*LINEUP_LG_ADJ : leagueK;
   const diff=(r.oppK-kBase)*100;
   let desc;
   if(diff>=2) desc=r.oppSplit?`whiff-prone vs ${r.hand==="L"?"LHP":"RHP"}`:"whiff-prone lineup";
   else if(diff>=0.7) desc="above-avg K lineup";
   else if(diff<=-2) desc="tough contact";
   else desc="avg contact";
-  tags.push(r.lineupUsed ? "📋 "+desc : desc);   // 📋 = actual posted lineup, not season avg
+  tags.push(r.lineupUsed ? "📋 "+desc : r.lineupProjected ? "≈9 "+desc : desc);   // 📋 posted 9 · ≈9 projected (last 9 vs this hand) · plain = team season avg
   // pitch-arsenal matchup: does this lineup whiff more/less vs HIS specific mix than overall?
   if(r.arsenal && r.arsenal.mixEdge!=null){
     const me=r.arsenal.mixEdge, pfx=r.arsenal.source==="lineup"?"📋 ":"";
@@ -2729,7 +2773,7 @@ function explainTarget(r, leagueK, mode='stat'){
   L.push(`Proj ${(r.projBase!=null?r.projBase:r.proj).toFixed(1)} → <b>${r.proj.toFixed(1)} K</b>${mults.length?` (${mults.join(", ")})`:""}`);
   if(r.calib && r.calib.apply)
     L.push(`Self-grade: your ${r.calib.n} settled legs threw <b>${r.calib.sumA} K</b> vs <b>${r.calib.sumP.toFixed(1)}</b> projected at bet time → every projection scaled <b>×${r.calib.f.toFixed(2)}</b> (shrunk toward 1.00, clamped ${CALIB_CLAMP[0]}–${CALIB_CLAMP[1]})`);
-  L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%${r.lineupUsed?` <span style="color:var(--ink-faint)">(posted 9 graded vs starting-lineup avg ${(leagueK*LINEUP_LG_ADJ*100).toFixed(1)}% — bench bats inflate the raw league rate)</span>`:``}`);
+  L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp ${r.lineupUsed?"posted 9":r.lineupProjected?`projected 9${r.lineupFrom?` (last vs a ${r.hand==="L"?"lefty":"righty"}, ${fmtShort(r.lineupFrom)})`:``}`:"team"} K ${(r.oppK*100).toFixed(1)}%${(r.lineupUsed||r.lineupProjected)&&r.oppVsHandK!=null?` · team ${(r.oppVsHandK*100).toFixed(1)}%`:``}${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%${(r.lineupUsed||r.lineupProjected)?` <span style="color:var(--ink-faint)">(9 graded vs starting-lineup avg ${(leagueK*LINEUP_LG_ADJ*100).toFixed(1)}% — bench bats inflate the raw league rate)</span>`:``}`);
   // Tier-1: show where the whiff signal regressed a noisy outcome K rate
   if(r.pWhiff!=null && r.pKraw!=null && Math.abs(r.pK-r.pKraw)>=0.005)
     L.push(`Stuff: ${r.pWhiff.toFixed(0)}% whiff → K ${(r.pKraw*100).toFixed(1)}% regressed to <b>${(r.pK*100).toFixed(1)}%</b> (whiff-implied ${(r.pKfromWhiff*100).toFixed(1)}%, small sample)`);
@@ -2848,7 +2892,7 @@ function renderKResults(rows, leagueK){
       <span class="crown">👑</span>
       <div>
         <div class="who">${esc(top.name)}</div>
-        <div class="vs">${esc(top.team)} vs ${esc(top.oppAb)} · opp lineup K ${(top.oppK*100).toFixed(1)}%${top.oppSplit?` vs ${top.hand==="L"?"LHP":"RHP"}`:""} · his K ${(top.pK*100).toFixed(1)}%</div>
+        <div class="vs">${esc(top.team)} vs ${esc(top.oppAb)} · opp K ${(top.lineupUsed||top.lineupProjected)?`${top.lineupUsed?"📋":"≈9"} ${(top.oppK*100).toFixed(1)}%${top.oppVsHandK!=null?` · team ${(top.oppVsHandK*100).toFixed(1)}%`:``}`:`${(top.oppK*100).toFixed(1)}%`}${top.oppSplit?` vs ${top.hand==="L"?"LHP":"RHP"}`:""} · his K ${(top.pK*100).toFixed(1)}%</div>
       </div>
       <div class="proj"><div class="big">${top.proj.toFixed(1)}</div><div class="lab">proj K · ${(poissonGE(top.proj,6)*100).toFixed(0)}% for 6+</div></div>
     </div>
@@ -2899,7 +2943,8 @@ function renderKResults(rows, leagueK){
         <td style="text-align:left;font-family:'JetBrains Mono';font-size:11px;color:var(--ink-dim)">${esc(r.team)} v ${esc(r.oppAb)}<div class="cell-note" style="margin-left:0">${esc(r.startTime||"")}${r.umpire?` · HP ${esc(r.umpire.split(" ").slice(-1)[0])}`:""}</div></td>
         <td style="font-family:'JetBrains Mono';font-size:11px;color:var(--chalk)">${r.l5&&r.l5.length?r.l5.map(g=>`${g.k} ${g.home?"v":"@"}${esc(g.opp)}`).join(" · "):"–"}</td>
         <td style="font-family:'JetBrains Mono';font-size:11px">${r.so} / ${esc(String(r.ip))} / ${(r.pK*100).toFixed(1)}%${(()=>{const t=pitcherNote(r);return t.length?`<div class="cell-note">${t.map(esc).join(" · ")}</div>`:"";})()}</td>
-        ${(()=>{const ln=lineupNote(r,leagueK);return `<td style="font-family:'JetBrains Mono';font-size:11px;color:${r.oppK>=leagueK?'var(--green)':'var(--red)'}" title="opposing lineup K-rate${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%">${(r.oppK*100).toFixed(1)}% <span style="color:var(--ink-faint)">${r.oppK>=leagueK?"▲":"▼"}${(Math.abs(r.oppK-leagueK)*100).toFixed(1)}</span>${ln.favorable?' ✅':''}<div class="cell-note">${ln.tags.map(esc).join(" · ")}</div></td>`;})()}
+        ${(()=>{const ln=lineupNote(r,leagueK);const lb=r.lineupUsed||r.lineupProjected;const base=lb?leagueK*LINEUP_LG_ADJ:leagueK;
+          return `<td style="font-family:'JetBrains Mono';font-size:11px;color:${r.oppK>=base?'var(--green)':'var(--red)'}" title="${lb?`${r.lineupUsed?"posted":"projected"} 9's K-rate${r.oppSplit?` (shaded vs ${r.hand==="L"?"LHP":"RHP"})`:""}${r.lineupProjected&&r.lineupFrom?` — last 9 they ran vs a ${r.hand==="L"?"lefty":"righty"} (${fmtShort(r.lineupFrom)})`:""} vs starting-lineup avg ${(base*100).toFixed(1)}%`:`team K-rate${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`}">${lb?(r.lineupUsed?"📋 ":"≈9 "):""}${(r.oppK*100).toFixed(1)}% <span style="color:var(--ink-faint)">${r.oppK>=base?"▲":"▼"}${(Math.abs(r.oppK-base)*100).toFixed(1)}</span>${lb&&r.oppVsHandK!=null?`<span style="color:var(--ink-faint)"> · team ${(r.oppVsHandK*100).toFixed(1)}%</span>`:``}${ln.favorable?' ✅':''}<div class="cell-note">${ln.tags.map(esc).join(" · ")}</div></td>`;})()}
         <td class="pj">${r.proj.toFixed(1)}</td>
         <td>${(poissonGE(r.proj,5)*100).toFixed(0)}%</td>
         <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%</td>
