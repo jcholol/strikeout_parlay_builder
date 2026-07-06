@@ -484,6 +484,9 @@
   .modebtn.active{background:var(--amber);border-color:var(--amber);color:var(--on-amber);box-shadow:var(--glow-amber)}
   .krec-modenote{font-family:"JetBrains Mono";font-size:10px;letter-spacing:.3px;color:var(--ink-faint)}
   .sugtag{font-size:9px;opacity:.85;cursor:default}
+  .notifbtn{font-size:13px;line-height:1;padding:4px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg-2);cursor:pointer;opacity:.55;transition:.12s}
+  .notifbtn:hover{opacity:1;border-color:var(--amber-dim)}
+  .notifbtn.active{opacity:1;border-color:var(--amber);box-shadow:var(--glow-amber)}
   .krec-record{font-family:"JetBrains Mono";font-size:10px;letter-spacing:.3px;color:var(--ink-dim);margin-left:auto;white-space:nowrap}
   .krec-rank{font-family:"JetBrains Mono";font-size:10px;font-weight:700;color:var(--ink-faint);background:rgba(127,127,127,.12);border-radius:5px;padding:0 5px;vertical-align:middle}
   /* selection funnel — explains the suggestion vs the projection-sorted ranking */
@@ -2930,6 +2933,7 @@ function renderKResults(rows, leagueK){
   lastK={rows, leagueK}; kShown=true;
   const top=rows[0];
   const rec=recommendParlay(rows, recLegCount, recMode);
+  lastRec=rec; checkStartPings();   // 🔔 watch list follows the current suggestion
   const mlbTotal=rows.find(r=>r.lgRank)?.lgRank.mlbTotal||null;
   const umpKnown=rows.some(r=>r.umpire);
   const out=document.getElementById("kResults");
@@ -2946,6 +2950,7 @@ function renderKResults(rows, leagueK){
       <div class="krec-head">
         <span class="krec-title sec-head-inline" data-sec-head="krec" title="Collapse / expand the suggested parlay">🎟️ Suggested Parlay <button class="collapse-btn sec-toggle" style="width:20px;height:20px" aria-label="Collapse section"><span class="chev">▾</span></button></span>
         <span class="krec-legbtns">${[2,3,4,5].map(n=>`<button class="legbtn${n===recLegCount?" active":""}" data-legs="${n}">${n}-leg</button>`).join("")}</span>
+        <button class="notifbtn${notifyPrefOn()?" active":""}" id="notifBtn" title="${notifyPrefOn()?"Pings ON — browser notification when a suggested leg's lineup posts or its game is ~20 min out (tab must stay open). Click to turn off.":"Ping me when a suggested leg's lineup posts or its game is ~20 min from first pitch (browser notification; tab must stay open)"}">🔔</button>
       </div>
       <div class="krec-modes">
         <button class="modebtn${recMode==="stat"?" active":""}" data-mode="stat" title="Double shortlist (top-${REC_SHORTLIST} matchups ∩ top-${REC_SHORTLIST} arms), ranked by model confidence. 'Strong' = model ≥${(STAT_STRONG*100)|0}% to hit. Market ignored for picking.">💪 Best on Stats</button>
@@ -3048,6 +3053,20 @@ function renderKResults(rows, leagueK){
   out.querySelectorAll(".modebtn").forEach(b=>{
     b.addEventListener("click", ()=>{ recMode=b.dataset.mode; renderKResults(lastK.rows, lastK.leagueK); });
   });
+  // 🔔 pings on/off (asks for browser-notification permission on first enable)
+  const nb=out.querySelector("#notifBtn");
+  if(nb) nb.addEventListener("click", async ()=>{
+    if(notifyPrefOn()){ localStorage.setItem("bullpen.notify","off"); toast("Pings off"); }
+    else if(!("Notification" in window)){ toast("This browser doesn't support notifications"); return; }
+    else{
+      let perm=Notification.permission;
+      if(perm==="default") perm=await Notification.requestPermission();
+      if(perm!=="granted"){ toast("Notifications are blocked for this site — allow them in the browser first"); return; }
+      localStorage.setItem("bullpen.notify","on");
+      toast("Pings on: lineup posts + ~20 min to first pitch, for suggested legs (keep this tab open)");
+    }
+    renderKResults(lastK.rows, lastK.leagueK);
+  });
   const recBtn=out.querySelector("#buildRec");
   if(recBtn && rec){ recBtn.addEventListener("click", ()=>buildRecommendedParlay(rec.legs)); }
   // collapsible sections (persist across re-renders): Suggested Parlay + Edge Board + Ranking
@@ -3088,6 +3107,33 @@ function annotateK(rows){
   });
 }
 
+/* ---- 🔔 pings: browser notifications for the suggested parlay's legs ----
+   Fires once per event while the tab is open (the polling below is the engine; a static
+   page can't send SMS/push with the tab closed): (a) a suggested leg's OPPONENT lineup
+   posts — the K market's catalyst, time to compare the ≈9 estimate to the real 9;
+   (b) a suggested leg's game is ~20 min from first pitch. In-focus → toast instead. */
+let lastRec=null;   // last computed suggestion (set in renderKResults); the watch list
+const notifiedKeys=new Set(JSON.parse(localStorage.getItem("bullpen.notified")||"[]"));
+function notifyPrefOn(){ return localStorage.getItem("bullpen.notify")==="on"; }
+function canNotify(){ return notifyPrefOn() && "Notification" in window && Notification.permission==="granted"; }
+function ping(title, body, key){
+  if(notifiedKeys.has(key)) return;
+  notifiedKeys.add(key);
+  localStorage.setItem("bullpen.notified", JSON.stringify([...notifiedKeys].slice(-200)));
+  if(document.hasFocus()){ toast(`${title}${body?` — ${body}`:""}`); return; }
+  try{ new Notification(title, {body}); }catch(e){ toast(`${title}${body?` — ${body}`:""}`); }
+}
+function watchedLegs(){ return ((lastRec&&lastRec.legs)||[]).filter(l=>l.gamePk); }
+function checkStartPings(){
+  if(!canNotify() || !slateState || !slateState.games) return;
+  const now=Date.now();
+  watchedLegs().forEach(l=>{
+    const g=slateState.games.find(x=>x.gamePk===l.gamePk); if(!g||!g.gameDate) return;
+    const mins=(new Date(g.gameDate)-now)/60000;
+    if(mins>0 && mins<=20) ping(`⚾ ${l.name} starts soon`, `first pitch ${fmtTime(g.gameDate)} — suggested leg ${l.target}+ K`, `${slateState.date}:${l.gamePk}:start`);
+  });
+}
+
 /* ---- opponent-lineup-posted flag on the slate ----
    For a strikeout bet on pitcher P, the catalyst is the OPPOSING batting order being set.
    Most useful for the earliest games — later games' lineups won't post until after the
@@ -3116,6 +3162,11 @@ async function refreshLineupFlags(){
     ["away","home"].forEach(side=>{
       const me=g.teams[side], opp=g.teams[side==="away"?"home":"away"];
       const pp=me.probablePitcher; if(!pp) return;
+      // 🔔 ping when a suggested leg's opponent posts their lineup (pre-game only)
+      if(!started && posted[opp.team.id] && canNotify()){
+        const leg=watchedLegs().find(l=>l.gamePk===g.gamePk && l.r && l.r.id===pp.id);
+        if(leg) ping(`📋 Lineup posted: ${opp.team.name||"opponent"}`, `${leg.name} suggested at ${leg.target}+ K — compare the posted 9 before betting`, `${slateState.date}:${g.gamePk}:lineup:${opp.team.id}`);
+      }
       const card=document.querySelector(`.pcard[data-pid="${pp.id}"][data-gamepk="${g.gamePk}"]`);
       if(!card) return;
       setLineupFlag(card, started ? null : (posted[opp.team.id] ? "in" : "pending"));  // moot once underway
@@ -3249,8 +3300,8 @@ function maybeRefreshK(){
 function startAutoGrade(){
   clearInterval(autoGradeTimer);
   setTimeout(()=>autoSettle(true), 4000);                            // shortly after load / refresh
-  autoGradeTimer=setInterval(()=>{ autoSettle(true); maybeRefreshK(); maybeRefreshLineups(); }, 150000);   // periodic while open
-  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); maybeRefreshLineups(); liveTick(); };
+  autoGradeTimer=setInterval(()=>{ autoSettle(true); maybeRefreshK(); maybeRefreshLineups(); checkStartPings(); }, 150000);   // periodic while open
+  const onReturn=()=>{ autoSettle(false); maybeRefreshK(); maybeRefreshLineups(); checkStartPings(); liveTick(); };
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) onReturn(); }); // return to tab
   window.addEventListener("focus", onReturn);
 }
