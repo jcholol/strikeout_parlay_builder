@@ -2442,7 +2442,10 @@ function pitcherNote(r){
 function lineupNote(r, leagueK){
   const tags=[];
   if(r.oppRecord) tags.push(`${r.oppAb} ${r.oppRecord}`);
-  const diff=(r.oppK-leagueK)*100;
+  // posted lineups are 9 regulars — grade them against other STARTING lineups, not the
+  // all-batters league avg, or most of the slate reads "below avg" (bench bats dilute leagueK)
+  const kBase = r.lineupUsed ? leagueK*LINEUP_LG_ADJ : leagueK;
+  const diff=(r.oppK-kBase)*100;
   let desc;
   if(diff>=2) desc=r.oppSplit?`whiff-prone vs ${r.hand==="L"?"LHP":"RHP"}`:"whiff-prone lineup";
   else if(diff>=0.7) desc="above-avg K lineup";
@@ -2484,6 +2487,10 @@ function estLegDecimal(p){
 // well enough lately that the innings-suppression haircut pulled the projection down.
 function oppHot(r){ return (r.oppStreak && r.oppStreak.type==="W" && r.oppStreak.n>=4) || (r.momentumF!=null && r.momentumF<0.97); }
 const KFLOOR=0.64;    // confidence floor: a leg must clear this to be reachable
+const LINEUP_LG_ADJ=0.97; // benchmark for POSTED lineups: a starting 9 whiffs ~3% less than the
+                          // all-batters league avg (bench/call-ups dilute it) — measured 2026-07-05,
+                          // mean posted-lineup K 21.4% vs league 22.1%. Display baseline only; the
+                          // projection's level bias is absorbed by the self-calibration factor.
 const EV_MARGIN=0.07; // MARKET mode gate: model prob must beat the Kalshi mid by ≥7 pts to be a real edge
 const STAT_STRONG=0.68; // STAT mode bar: model prob a leg must clear to be "strong" (market-independent)
 const FORM_MIN_N=4;   // need at least this many recent STARTS before recent form can veto a line
@@ -2722,7 +2729,7 @@ function explainTarget(r, leagueK, mode='stat'){
   L.push(`Proj ${(r.projBase!=null?r.projBase:r.proj).toFixed(1)} → <b>${r.proj.toFixed(1)} K</b>${mults.length?` (${mults.join(", ")})`:""}`);
   if(r.calib && r.calib.apply)
     L.push(`Self-grade: your ${r.calib.n} settled legs threw <b>${r.calib.sumA} K</b> vs <b>${r.calib.sumP.toFixed(1)}</b> projected at bet time → every projection scaled <b>×${r.calib.f.toFixed(2)}</b> (shrunk toward 1.00, clamped ${CALIB_CLAMP[0]}–${CALIB_CLAMP[1]})`);
-  L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`);
+  L.push(`Factors: his K ${(r.pK*100).toFixed(1)}% · opp lineup K ${(r.oppK*100).toFixed(1)}%${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%${r.lineupUsed?` <span style="color:var(--ink-faint)">(posted 9 graded vs starting-lineup avg ${(leagueK*LINEUP_LG_ADJ*100).toFixed(1)}% — bench bats inflate the raw league rate)</span>`:``}`);
   // Tier-1: show where the whiff signal regressed a noisy outcome K rate
   if(r.pWhiff!=null && r.pKraw!=null && Math.abs(r.pK-r.pKraw)>=0.005)
     L.push(`Stuff: ${r.pWhiff.toFixed(0)}% whiff → K ${(r.pKraw*100).toFixed(1)}% regressed to <b>${(r.pK*100).toFixed(1)}%</b> (whiff-implied ${(r.pKfromWhiff*100).toFixed(1)}%, small sample)`);
