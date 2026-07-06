@@ -2430,10 +2430,12 @@ function pitcherNote(r){
   if(ipN>=10 && r.so){ const k9=r.so/ipN*9; tags.push(`${k9>=11?Math.round(k9)+"+":k9.toFixed(1)} K/9`); }
   // (MLB/league K rank moved next to the pitcher's name in the ranking table — no longer duplicated here)
   if(r.gamesStarted>0){ const kPer=r.so/r.gamesStarted; if(kPer) tags.push(`${kPer.toFixed(1)} K/start`); }
+  // last meeting vs THIS opponent — matchup-specific, so it outranks the hot-last-out flourish.
+  // Cap is 6: the 5 stat tags above fill a normal starter's row, and a 5-cap silently ate this tag.
+  if(r.vsOppLast) tags.push(`${r.vsOppLast.k} K vs ${r.oppAb} ${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""}`);
   const last=r.l5&&r.l5.length?r.l5[r.l5.length-1].k:null;
   if(last!=null && last>=9) tags.push(`${last} K last out 🔥`);
-  if(r.vsOppLast) tags.push(`${r.vsOppLast.k} K vs ${r.oppAb} ${fmtShort(r.vsOppLast.date)}${r.vsOppLast.season!==r.season?` '${String(r.vsOppLast.season).slice(2)}`:""}`);
-  return tags.slice(0,5);
+  return tags.slice(0,6);
 }
 /* short qualitative descriptors for the lineup side (incl. park + weather, which
    are folded into the projection) */
