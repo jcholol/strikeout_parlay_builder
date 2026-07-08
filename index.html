@@ -2370,6 +2370,45 @@ function projectK(pStat, oppHit, leagueK, pWhiff, oppWhiff, oppN){
            pKfromWhiff:pb.kFromWhiff, oppKfromWhiff:ob.kFromWhiff, bfPerStart, bullpen, thin, gs, starterShare };
 }
 
+/* ---- trained ML model (LightGBM Poisson, fit offline on 2021-25 pitcher-starts;
+   pipeline in Desktop\parlay-ml). Display-only for now: shown beside the log5
+   projection for comparison — ranking, suggestions & verdicts still use projectK.
+   model.min.json ships beside this file; if the fetch fails the app is unaffected. */
+let K_ML=null;
+const K_ML_PROMISE=fetch("model.min.json").then(r=>r.ok?r.json():null).then(m=>(K_ML=m)).catch(()=>null);
+
+function kModelScore(model, feats){
+  const x=model.features.map(f=>{ const v=feats[f]; return (v===undefined||v===null)?NaN:+v; });
+  let raw=model.init_offset||0;
+  for(let n of model.trees){
+    while(n.v===undefined){
+      const v=x[n.f];
+      n=(Number.isNaN(v)?n.d:v<=n.t)?n.l:n.r;
+    }
+    raw+=n.v;
+  }
+  return Math.exp(raw);
+}
+/* P(K > line) around the ML mean — negative-binomial tail width fitted on held-out
+   data (dispersion_r), which is what fixes projectK's overconfident extremes */
+function kModelProbOver(model, mu, line){
+  const r=model.dispersion_r, kmax=Math.floor(line);
+  let lp, cdf;
+  if(r==null){ lp=-mu; cdf=Math.exp(lp);
+    for(let k=1;k<=kmax;k++){ lp+=Math.log(mu/k); cdf+=Math.exp(lp); } }
+  else{ const p=r/(r+mu); lp=r*Math.log(p); cdf=Math.exp(lp);
+    for(let k=1;k<=kmax;k++){ lp+=Math.log((k+r-1)/k)+Math.log(1-p); cdf+=Math.exp(lp); } }
+  return Math.max(0, Math.min(1, 1-cdf));
+}
+/* days since his last start, from the game log (a training feature) */
+function daysRestFrom(log, asOf){
+  const starts=(log||[]).filter(s=>+s.stat.gamesStarted>=1);
+  const last=starts[starts.length-1];
+  if(!last) return null;
+  const d=Math.round((new Date(asOf)-new Date(last.date))/864e5);
+  return (d>=0&&d<400)?d:null;
+}
+
 async function analyzeK(opts={}){
   const quiet=!!opts.quiet;   // background refresh (e.g. lineups posted) — don't flash the UI
   if(!slateState || !slateState.games.length){ if(!quiet) toast("Load a slate first"); return; }
@@ -2475,6 +2514,27 @@ async function analyzeK(opts={}){
         const arsenalF=(arsM && arsM.mixEdge!=null) ? Math.max(0.94, Math.min(1.06, 1 + 0.010*arsM.mixEdge)) : 1.00;
         const adjProj=Math.min(12.5, m.proj * parkF * weatherF * work.factor * momentumF * arsenalF * calibF);
         m.projBase=m.proj; m.proj=adjProj;
+        // trained-model projection (feature definitions must mirror parlay-ml/train.py)
+        let mlProj=null;
+        const mlModel=await K_ML_PROMISE;
+        if(mlModel){
+          const bfN=+pStat.battersFaced||0, soN=+pStat.strikeOuts||0;
+          const gsN=+pStat.gamesStarted||0, gpN=+pStat.gamesPlayed||gsN;
+          try{
+            mlProj=kModelScore(mlModel,{
+              p_k_rate: bfN?soN/bfN:null, p_bf: bfN||null, p_gs: gsN,
+              starter_share: gpN?gsN/gpN:null, bf_per_start: gsN?bfN/gsN:null,
+              days_rest: daysRestFrom(log, slateState.date),
+              opp_k: overallHit&&+overallHit.plateAppearances?(+overallHit.strikeOuts)/(+overallHit.plateAppearances):null,
+              opp_k_hand: splitHit?(+splitHit.strikeOuts)/(+splitHit.plateAppearances):null,
+              opp_pa_hand: splitHit?+splitHit.plateAppearances:null,
+              lg_k: leagueK, park_f: parkKFactor(g.venue?.name),
+              temp_f: ctx.tempF, wind_mph: ctx.wind?(parseInt(ctx.wind)||null):null,
+              is_home: side==="home"?1:0, is_night: new Date(g.gameDate).getHours()>=17?1:0,
+              month: +slateState.date.slice(5,7), hand_R: hand==="R"?1:0,
+            });
+          }catch(e){ mlProj=null; }
+        }
         rows.push({
           name:pp.fullName, id:pp.id, gamePk:g.gamePk,
           opp:shortName(opp.team.name), oppAb:opp.team.abbreviation||shortName(opp.team.name),
@@ -2489,7 +2549,7 @@ async function analyzeK(opts={}){
           parkF, weatherF, workFactor:work.factor, workFlags:work.flags, calibF, calib,
           momentumF, oppRecentK: form?form.recentK:null, oppRecentPA: form?form.recentPA:null,
           oppSeasonK, oppStreak: form?form.streak:null, oppWL: form?form.wl:null,
-          vsOppLast, season,
+          vsOppLast, season, mlProj,
           temp:ctx.tempF, weather:ctx.condition, wind:ctx.wind, umpire:ctx.umpire,
           startTime: fmtTime(g.gameDate),
           l5, recentStartK,
@@ -2944,7 +3004,7 @@ function renderKResults(rows, leagueK){
         <div class="who">${esc(top.name)}</div>
         <div class="vs">${esc(top.team)} vs ${esc(top.oppAb)} · opp K ${(top.lineupUsed||top.lineupProjected)?`${top.lineupUsed?"📋":"≈9"} ${(top.oppK*100).toFixed(1)}%${top.oppVsHandK!=null?` · team ${(top.oppVsHandK*100).toFixed(1)}%`:``}`:`${(top.oppK*100).toFixed(1)}%`}${top.oppSplit?` vs ${top.hand==="L"?"LHP":"RHP"}`:""} · his K ${(top.pK*100).toFixed(1)}%</div>
       </div>
-      <div class="proj"><div class="big">${top.proj.toFixed(1)}</div><div class="lab">proj K · ${(poissonGE(top.proj,6)*100).toFixed(0)}% for 6+</div></div>
+      <div class="proj"><div class="big">${top.proj.toFixed(1)}</div><div class="lab">proj K · ${(poissonGE(top.proj,6)*100).toFixed(0)}% for 6+</div>${top.mlProj!=null&&K_ML?`<div class="lab" title="trained model (LightGBM on 2021-25 pitcher-starts) — shown for comparison; verdicts still use the log5 model">🤖 ML ${top.mlProj.toFixed(1)} · ${(kModelProbOver(K_ML,top.mlProj,5.5)*100).toFixed(0)}% for 6+</div>`:""}</div>
     </div>
     <div class="krec">
       <div class="krec-head">
@@ -2996,15 +3056,15 @@ function renderKResults(rows, leagueK){
         <td style="font-family:'JetBrains Mono';font-size:11px">${r.so} / ${esc(String(r.ip))} / ${(r.pK*100).toFixed(1)}%${(()=>{const t=pitcherNote(r);return t.length?`<div class="cell-note">${t.map(esc).join(" · ")}</div>`:"";})()}</td>
         ${(()=>{const ln=lineupNote(r,leagueK);const lb=r.lineupUsed||r.lineupProjected;const base=lb?leagueK*LINEUP_LG_ADJ:leagueK;
           return `<td style="font-family:'JetBrains Mono';font-size:11px;color:${r.oppK>=base?'var(--green)':'var(--red)'}" title="${lb?`${r.lineupUsed?"posted":"projected"} 9's K-rate${r.oppSplit?` (shaded vs ${r.hand==="L"?"LHP":"RHP"})`:""}${r.lineupProjected&&r.lineupFrom?` — last 9 they ran vs a ${r.hand==="L"?"lefty":"righty"} (${fmtShort(r.lineupFrom)})`:""} vs starting-lineup avg ${(base*100).toFixed(1)}%`:`team K-rate${r.oppSplit?` vs ${r.hand==="L"?"LHP":"RHP"}`:""} vs league ${(leagueK*100).toFixed(1)}%`}">${lb?(r.lineupUsed?"📋 ":"≈9 "):""}${(r.oppK*100).toFixed(1)}% <span style="color:var(--ink-faint)">${r.oppK>=base?"▲":"▼"}${(Math.abs(r.oppK-base)*100).toFixed(1)}</span>${lb&&r.oppVsHandK!=null?`<span style="color:var(--ink-faint)"> · team ${(r.oppVsHandK*100).toFixed(1)}%</span>`:``}${ln.favorable?' ✅':''}<div class="cell-note">${ln.tags.map(esc).join(" · ")}</div></td>`;})()}
-        <td class="pj">${r.proj.toFixed(1)}</td>
-        <td>${(poissonGE(r.proj,5)*100).toFixed(0)}%</td>
-        <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%</td>
-        <td>${(poissonGE(r.proj,7)*100).toFixed(0)}%</td>
+        <td class="pj">${r.proj.toFixed(1)}${r.mlProj!=null?`<div class="cell-note" style="margin-left:0" title="trained model (LightGBM on 2021-25 pitcher-starts) — comparison only; verdicts still use the log5 model">🤖 ${r.mlProj.toFixed(1)}</div>`:""}</td>
+        <td>${(poissonGE(r.proj,5)*100).toFixed(0)}%${r.mlProj!=null&&K_ML?`<div class="cell-note" style="margin-left:0">🤖 ${(kModelProbOver(K_ML,r.mlProj,4.5)*100).toFixed(0)}%</div>`:""}</td>
+        <td class="p6">${(poissonGE(r.proj,6)*100).toFixed(0)}%${r.mlProj!=null&&K_ML?`<div class="cell-note" style="margin-left:0">🤖 ${(kModelProbOver(K_ML,r.mlProj,5.5)*100).toFixed(0)}%</div>`:""}</td>
+        <td>${(poissonGE(r.proj,7)*100).toFixed(0)}%${r.mlProj!=null&&K_ML?`<div class="cell-note" style="margin-left:0">🤖 ${(kModelProbOver(K_ML,r.mlProj,6.5)*100).toFixed(0)}%</div>`:""}</td>
       </tr>
       <tr class="why-row" data-why-row="${r.id}-${r.gamePk}" style="display:none"><td colspan="10" style="padding:0 8px 8px">${explainTarget(r, leagueK, recMode)}</td></tr>`).join("")}</tbody>
     </table>
     <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--ink-faint);margin-top:9px;letter-spacing:.5px;line-height:1.5">
-      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload, opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances) & pitch-arsenal matchup (how this lineup whiffs vs his specific pitch mix, league-relative)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee.
+      log5 model: pitcher K% × opponent lineup K% (vs his hand) ÷ league K% (${(leagueK*100).toFixed(1)}%), with each K rate regressed toward its Statcast whiff-implied value (K% ≈ 0.88 × whiff%), scaled by batters/start and adjusted for park, temperature, recent workload, opponent early-exit risk (hot bats / win streak shorten the outing → fewer K chances) & pitch-arsenal matchup (how this lineup whiffs vs his specific pitch mix, league-relative)${mlbTotal?`. Ranked among ${mlbTotal} qualified pitchers`:""}. ${umpKnown?"Home-plate umpire shown for reference":"Home-plate umpire not posted yet"} — umpire K-tendency data isn't in the feed, so it's not factored. Click a row to add a Strikeouts leg at the model's 64%-confidence line, or ⓘ for the math. Projection, not a guarantee. 🤖 rows: a gradient-boosted model trained on 24k pitcher-starts (2021–25) with calibrated tail probabilities — shown side-by-side for comparison while it earns trust; ranking, suggestions & verdicts still come from the log5 model.
     </div>
     </div>
   </div>`;
